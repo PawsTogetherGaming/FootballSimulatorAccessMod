@@ -140,7 +140,7 @@ Speech events are also logged to `c:\football\speech_log.txt`.
 ## Known Limitations
 
 - **Defense**: Routes are announced on defense as well as offense. Full defensive accessibility — ball carrier tracking, tackle alerts, interception cues — is the primary focus of the next version.
-- **No hot routes**: Football Simulator does not have individual route adjustments at the line. Audibles (Y / Triangle) change the entire play.
+- **No hot routes**: Football Simulator does not have individual route adjustments at the line. To change your play at the line, use Audibles (Y / Triangle) to switch to a different play entirely.
 
 ---
 
