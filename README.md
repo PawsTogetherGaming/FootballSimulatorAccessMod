@@ -58,7 +58,6 @@ After selecting an audible and accepting the new play, the routes for that play 
 - Football Simulator (Steam, Early Access)
 - BepInEx 5.4.x — **Mono version, NOT BepInEx 6**
 - NVDA screen reader (recommended) — or Windows SAPI will be used automatically as a fallback
-- .NET SDK 8 (for building from source)
 - Xbox One or PS4/PS5 controller (the game requires a controller)
 
 ---
@@ -75,36 +74,20 @@ After selecting an audible and accepting the new play, the routes for that play 
    ```
 4. Launch Football Simulator once via Steam, then close it — this lets BepInEx generate its configuration folders
 
-### Step 2: NVDA Controller Client (recommended)
+### Step 2: Install the Mod
 
-This file allows the mod to use NVDA's speech directly, which is faster and more reliable than SAPI.
-
-1. Go to NVDA's GitHub releases page (search: **nvaccess/nvda releases**)
-2. Download `nvda_controllerClient.zip` from any release
-3. Extract `nvdaControllerClient64.dll`
-4. Place it in:
-   ```
-   C:\Program Files (x86)\Steam\steamapps\common\Football Simulator\BepInEx\plugins\
-   ```
-
-If this file is absent, the mod falls back to Windows SAPI Text-to-Speech automatically.
-
-### Step 3: Build the Mod
-
-Open a command prompt in `c:\football\FootballAccessMod\` and run:
+The release zip contains two files. Copy both into your BepInEx plugins folder:
 
 ```
-dotnet build -c Release
+C:\Program Files (x86)\Steam\steamapps\common\Football Simulator\BepInEx\plugins\
 ```
 
-### Step 4: Install the Mod
+- `FootballAccessMod.dll` — the mod itself
+- `nvdaControllerClient.dll` — routes speech through NVDA directly for faster, more reliable output
 
-```
-copy "c:\football\FootballAccessMod\bin\Release\FootballAccessMod.dll" ^
-     "C:\Program Files (x86)\Steam\steamapps\common\Football Simulator\BepInEx\plugins\"
-```
+If NVDA is not running, the mod falls back to Windows SAPI Text-to-Speech automatically.
 
-### Step 5: Launch
+### Step 3: Launch
 
 Start Football Simulator normally through Steam. Within a few seconds of the title screen you should hear:
 
