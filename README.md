@@ -66,7 +66,7 @@ After selecting an audible and accepting the new play, the routes for that play 
 
 ### Step 1: Install BepInEx 5
 
-1. Go to the BepInEx GitHub releases page (search: **BepInEx/BepInEx releases**)
+1. Go to the [BepInEx GitHub releases page](https://github.com/BepInEx/BepInEx/releases)
 2. Download `BepInEx_win_x64_5.4.xx.zip` — make sure it is the **5.x Mono** version
 3. Extract ALL contents directly into your game folder:
    ```
