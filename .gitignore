@@ -1,0 +1,11 @@
+# Build output
+FootballAccessMod/bin/
+FootballAccessMod/obj/
+
+# Debug / runtime files
+speech_log.txt
+scene_dump.txt
+
+# OS
+.DS_Store
+Thumbs.db
