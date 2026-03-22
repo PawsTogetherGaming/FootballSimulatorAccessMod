@@ -174,7 +174,6 @@ namespace FootballAccessMod
             LoadingScreenReader.Poll();
             HowToPlayReader.Poll();
             TeamSelectReader.Poll();
-            ExhibitionReader.Poll();
             NewSeasonReader.Poll();
             LoadSeasonReader.Poll();
             SeasonHubReader.Poll();
