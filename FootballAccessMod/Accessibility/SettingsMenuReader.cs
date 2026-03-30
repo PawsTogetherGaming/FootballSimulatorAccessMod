@@ -293,6 +293,7 @@ namespace FootballAccessMod.Accessibility
                 $"Use D-pad up and down to navigate, left and right to change. B to close. " +
                 $"Setting 1 of {Settings.Length}: {s.Name}, {s.Format(s.Get())}.";
             SpeechManager.Speak(msg);
+            SpeechManager.SpeakQueued(s.Description);
         }
 
         private static void Close()
@@ -312,6 +313,7 @@ namespace FootballAccessMod.Accessibility
             try { System.IO.File.AppendAllText(@"C:\football\speech_log.txt",
                 $"[{System.DateTime.Now:HH:mm:ss.fff}] SETTINGS_FOCUS idx={_focus} name={s.Name}\n"); } catch { }
             SpeechManager.Speak($"Setting {_focus + 1} of {Settings.Length}: {s.Name}, {s.Format(s.Get())}.");
+            SpeechManager.SpeakQueued(s.Description);
         }
 
         private static void ChangeValue(int dir)
