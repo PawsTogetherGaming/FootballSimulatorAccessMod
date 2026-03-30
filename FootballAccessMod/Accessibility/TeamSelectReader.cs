@@ -41,6 +41,15 @@ namespace FootballAccessMod.Accessibility
         private static FieldInfo     _inMatchOptsField  = null;
         private static bool          _menuMgrSearched   = false;
         private static bool          _lastInMatchOpts   = false;
+        private static bool          _matchOptsHelpFired = false;
+        private static float         _matchOptsSuppressRowUntil = 0f; // suppress row focus after opening
+        private static float         _pendingMatchOptsHelpTime  = -1f; // fires nav instructions after "Match options." reads
+
+        // Cached option values — updated every Poll(), read by PollInput()
+        private static string _cachedWeather   = "";
+        private static string _cachedQuarters  = "";
+        private static string _cachedStadium   = "";
+        private static string _cachedTimeOfDay = "";
 
         // Match Options row focus (Next AND Prev buttons per row)
         private static string    _lastMatchOptionsRow = "";
@@ -70,6 +79,38 @@ namespace FootballAccessMod.Accessibility
 
         // =========================================================
 
+        // =========================================================
+        // PollInput — every Unity frame, before the 120ms throttle.
+        // Uses GetKeyDown so quick Y/B taps are never missed.
+        // =========================================================
+
+        public static void PollInput()
+        {
+            if (!_wasActive) return;
+
+            // Y (JoystickButton3) — open Match Options
+            if (Input.GetKeyDown(KeyCode.JoystickButton3))
+            {
+                Plugin.Log.LogInfo($"[TS] Y pressed. _wasActive={_wasActive} _lastInMatchOpts={_lastInMatchOpts} weather='{_cachedWeather}'");
+                if (!_lastInMatchOpts)
+                {
+                    _lastInMatchOpts     = true;
+                    _lastMatchOptionsRow = "";
+                    OpenMatchOptions();
+                }
+                return;
+            }
+
+            // B (JoystickButton1) — close Match Options
+            if (Input.GetKeyDown(KeyCode.JoystickButton1) && _lastInMatchOpts)
+            {
+                _lastInMatchOpts     = false;
+                _lastMatchOptionsRow = "";
+            }
+        }
+
+        // =========================================================
+
         public static void Poll()
         {
             _screen = GameObject.Find("TeamSelect_Screen");
@@ -81,7 +122,7 @@ namespace FootballAccessMod.Accessibility
                 return;
             }
 
-            // Read current values
+            // Read current values and cache for PollInput()
             string homeTeam  = ReadPath(_screen, "Bottom Letterbox/Home Team Name");
             string homeMasc  = ReadPath(_screen, "Bottom Letterbox/Home Team Mascot");
             string awayTeam  = ReadPath(_screen, "Bottom Letterbox/Away Team Name");
@@ -90,6 +131,10 @@ namespace FootballAccessMod.Accessibility
             string weather   = ReadPath(_screen, "Match Options/Weather");
             string timeOfDay = ReadPath(_screen, "Match Options/Time Of Day");
             string quarters  = ReadPath(_screen, "Match Options/Time Per Quarter");
+            _cachedWeather   = weather;
+            _cachedQuarters  = quarters;
+            _cachedStadium   = stadium;
+            _cachedTimeOfDay = timeOfDay;
 
             // ---- First entry ----
             if (!_wasActive)
@@ -101,16 +146,26 @@ namespace FootballAccessMod.Accessibility
                 _lastStadium   = stadium;   _lastWeather   = weather;
                 _lastTimeOfDay = timeOfDay; _lastQuarters  = quarters;
 
-                _lastAnnouncedSide   = "";
+                // Pre-seed side focus: find the controller icon now so CheckSideFocus
+                // doesn't fire on the very next poll and interrupt the entry message.
+                _ctrlIcon0        = GameObject.Find("ControllerIcon_0");
+                _ctrlIconSearched = true;
+                _lastAnnouncedSide = (_ctrlIcon0 != null && _ctrlIcon0.transform.position.x < 0f)
+                    ? "Away" : "Home";
+
                 _lastInMatchOpts     = false;
                 _lastMatchOptionsRow = "";
                 _lastMaxPassing      = false;
-                _ctrlIconSearched    = false;  _ctrlIcon0       = null;
+                _matchOptsHelpFired  = false;
                 _menuMgrSearched     = false;  _menuMgr         = null;
                 _inMatchOptsField    = null;
                 _maxPassSearched     = false;  _maxPassObj      = null;
                 _uiBtnReflDone       = false;
                 _rowsFound           = false;
+                _rowWeather = _rowWeatherPrev = null;
+                _rowQuarters = _rowQuartersPrev = null;
+                _rowStadium = _rowStadiumPrev = null;
+                _rowTimeOfDay = _rowTimeOfDayPrev = null;
                 _teamArrowsSearched  = false;  _lastTeamArrow   = "";
 
                 var sb = new StringBuilder("Team select.");
@@ -118,8 +173,11 @@ namespace FootballAccessMod.Accessibility
                     sb.Append($" Home: {homeTeam} {homeMasc}.".TrimEnd(' ', '.') + ".");
                 if (!string.IsNullOrWhiteSpace(awayTeam))
                     sb.Append($" Away: {awayTeam} {awayMasc}.".TrimEnd(' ', '.') + ".");
-                sb.Append(" Press left or right to switch sides.");
-                sb.Append(" Press Y for match options. Press A to confirm.");
+                sb.Append(" Press left or right trigger to scroll through teams.");
+                sb.Append(" Press left or right on the D-pad to switch between home and away side.");
+                sb.Append(" Press X to toggle Maximum Passing.");
+                sb.Append(" Press Y for match options: weather, time of day, stadium, and quarter length.");
+                sb.Append(" Press A to confirm.");
                 SpeechManager.Speak(sb.ToString());
                 return;
             }
@@ -162,11 +220,26 @@ namespace FootballAccessMod.Accessibility
             // ---- Side focus ----
             CheckSideFocus(homeTeam, homeMasc, awayTeam, awayMasc);
 
-            // ---- Match Options panel open/close ----
-            CheckMatchOptionsPanel(stadium, weather, timeOfDay, quarters);
+            // ---- Match Options panel open/close (reflection fallback) ----
+            // Primary detection is in PollInput() via GetKeyDown on Y/B.
+            // This fallback catches edge cases where the panel opens another way.
+            if (!_lastInMatchOpts)
+                CheckMatchOptionsPanelFallback(stadium, weather, timeOfDay, quarters);
+
+            // ---- Pending Match Options nav instructions ----
+            // Fires ~1.2 s after "Match options." so the name reads fully first.
+            if (_pendingMatchOptsHelpTime > 0f && Time.unscaledTime >= _pendingMatchOptsHelpTime)
+            {
+                _pendingMatchOptsHelpTime = -1f;
+                SpeechManager.Speak(
+                    "Press up and down to navigate options. " +
+                    "Press left and right on the D-pad to select an arrow, " +
+                    "then press A to change the option value.");
+            }
 
             // ---- Match Options row focus (while panel is open) ----
-            if (_lastInMatchOpts)
+            // Suppressed until after the nav instructions have played.
+            if (_lastInMatchOpts && Time.unscaledTime >= _matchOptsSuppressRowUntil)
                 CheckMatchOptionsRow(weather, quarters, stadium, timeOfDay);
 
             // ---- Team arrow button focus (main screen, outside Match Options) ----
@@ -237,28 +310,47 @@ namespace FootballAccessMod.Accessibility
         }
 
         // --------------------------------------------------------
-        // Match Options panel open / close
+        // Match Options panel open / close (reflection / row-activity fallback)
+        // Only fires when the panel is currently reported as closed; handles
+        // cases where something other than Y opens it (edge case).
         // --------------------------------------------------------
-        private static void CheckMatchOptionsPanel(
+        private static void CheckMatchOptionsPanelFallback(
             string stadium, string weather, string timeOfDay, string quarters)
         {
             bool nowIn = ReadInMatchOpts();
-            if (nowIn == _lastInMatchOpts) return;
+            if (!nowIn || nowIn == _lastInMatchOpts) return;
             _lastInMatchOpts     = nowIn;
             _lastMatchOptionsRow = "";
+            OpenMatchOptions();
+        }
 
-            if (!nowIn) return;   // closed — nothing to say
+        // Shared logic for when Match Options has just been opened.
+        // Reads current values then appends navigation help so the player
+        // hears everything in one uninterrupted announcement.
+        private const float MATCH_OPTS_HELP_DELAY = 1.5f; // seconds after initial announcement before nav instructions
 
-            // Just opened: find row buttons and read full state
+        private static void OpenMatchOptions()
+        {
             FindMatchOptionsRows();
+            _matchOptsHelpFired        = true;
+            _pendingMatchOptsHelpTime  = Time.unscaledTime + MATCH_OPTS_HELP_DELAY;
+            _matchOptsSuppressRowUntil = Time.unscaledTime + 4f + MATCH_OPTS_HELP_DELAY;
 
-            var sb = new StringBuilder("Match options.");
-            if (!string.IsNullOrWhiteSpace(weather))   sb.Append($" Weather: {weather}.");
-            if (!string.IsNullOrWhiteSpace(quarters))  sb.Append($" {quarters}.");
-            if (!string.IsNullOrWhiteSpace(stadium))   sb.Append($" Stadium: {stadium}.");
-            if (!string.IsNullOrWhiteSpace(timeOfDay)) sb.Append($" Time of day: {timeOfDay}.");
-            sb.Append(" Use up and down to navigate rows, left and right to change.");
-            SpeechManager.Speak(sb.ToString());
+            // Announce screen name + whichever option is currently highlighted
+            string focused = GetFocusedOptionName();
+            SpeechManager.Speak(string.IsNullOrEmpty(focused)
+                ? "Match options."
+                : $"Match options. {focused}.");
+        }
+
+        // Returns the display name of the currently focused match options row, or "" if none.
+        private static string GetFocusedOptionName()
+        {
+            if (IsRowFocused(_rowWeather)   || IsRowFocused(_rowWeatherPrev))   return "Weather";
+            if (IsRowFocused(_rowQuarters)  || IsRowFocused(_rowQuartersPrev))  return "Quarters";
+            if (IsRowFocused(_rowStadium)   || IsRowFocused(_rowStadiumPrev))   return "Stadium";
+            if (IsRowFocused(_rowTimeOfDay) || IsRowFocused(_rowTimeOfDayPrev)) return "Time of day";
+            return "";
         }
 
         // --------------------------------------------------------
@@ -403,9 +495,22 @@ namespace FootballAccessMod.Accessibility
 
         private static bool ReadInMatchOpts()
         {
-            if (_menuMgr == null || _inMatchOptsField == null) return false;
-            try { return (bool)_inMatchOptsField.GetValue(_menuMgr); }
-            catch { return false; }
+            // Primary: reflection on inMatchOptions bool field
+            if (_menuMgr != null && _inMatchOptsField != null)
+            {
+                try { return (bool)_inMatchOptsField.GetValue(_menuMgr); }
+                catch { }
+            }
+
+            // Fallback: check whether the Match Options row buttons exist and are active.
+            // FindMatchOptionsRows() must have been called first to populate them.
+            // We search eagerly here if needed.
+            if (!_rowsFound) FindMatchOptionsRows();
+            if (_rowWeather != null && _rowWeather.gameObject.activeInHierarchy) return true;
+            if (_rowStadium != null && _rowStadium.gameObject.activeInHierarchy) return true;
+            if (_rowQuarters != null && _rowQuarters.gameObject.activeInHierarchy) return true;
+            if (_rowTimeOfDay != null && _rowTimeOfDay.gameObject.activeInHierarchy) return true;
+            return false;
         }
 
         private static void TryInitUIButtonReflection()
@@ -442,6 +547,10 @@ namespace FootballAccessMod.Accessibility
             _lastInMatchOpts     = false;
             _lastMatchOptionsRow = "";
             _lastMaxPassing      = false;
+            _matchOptsHelpFired        = false;
+            _matchOptsSuppressRowUntil = 0f;
+            _pendingMatchOptsHelpTime  = -1f;
+            _cachedWeather = _cachedQuarters = _cachedStadium = _cachedTimeOfDay = "";
             _ctrlIconSearched    = false;  _ctrlIcon0       = null;
             _menuMgrSearched     = false;  _menuMgr         = null;
             _inMatchOptsField    = null;

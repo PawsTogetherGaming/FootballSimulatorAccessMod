@@ -274,27 +274,37 @@ namespace FootballAccessMod.Accessibility
         }
 
         // Calculates a world-space waypoint in the chosen lane, LANE_LOOKAHEAD metres ahead.
+        // Uses carrier.transform.forward (XZ-projected) so the target is always in front of
+        // the carrier regardless of which end zone the offense is attacking.
         private static Vector3 BuildLaneTarget(Component carrier, string bestDir)
         {
             try
             {
-                bool isHomeDefense = false;
-                try { isHomeDefense = (bool)(_fldIsHomeDefense?.GetValue(_matchInst) ?? false); }
-                catch { }
-
-                // "Ahead" in world space depends on which direction the offence is advancing.
-                // isHomeDefense=true means the home team is defending their own end, so the
-                // offence (away) is going north (+Z). We invert for the team on offence.
-                float forwardZ = isHomeDefense ? 1f : -1f;
-
                 Vector3 pos = carrier.transform.position;
 
-                // Lateral offset: aim for centre of zone
+                // Project carrier facing onto XZ plane — this is the true "downfield" direction.
+                Vector3 fwd = carrier.transform.forward;
+                fwd.y = 0f;
+                if (fwd.sqrMagnitude < 0.01f)
+                {
+                    // Fallback: derive from isHomeDefense if the model has no facing yet.
+                    // isHomeDefense=true  → away is on offense → going south (−Z)
+                    // isHomeDefense=false → home is on offense → going north (+Z)
+                    bool ihd = false;
+                    try { ihd = (bool)(_fldIsHomeDefense?.GetValue(_matchInst) ?? false); } catch { }
+                    fwd = new Vector3(0f, 0f, ihd ? -1f : 1f);
+                }
+                fwd.Normalize();
+
+                // Lateral offset: zones are classified in world-X space.
+                // When fwd.z > 0 (going north): world −X = carrier's left, +X = carrier's right.
+                // When fwd.z < 0 (going south): world +X = carrier's left, −X = carrier's right.
+                // We use world-X zone centres directly — the AI just needs to reach a clear lane.
                 float lateralX = bestDir == "left"  ? -LANE_OFFSET_SIDE
                                : bestDir == "right" ?  LANE_OFFSET_SIDE
-                               : pos.x;             // "straight" — keep current X
+                               : pos.x;   // "straight" — keep current X
 
-                return new Vector3(lateralX, pos.y, pos.z + forwardZ * LANE_LOOKAHEAD);
+                return new Vector3(lateralX, pos.y, pos.z + fwd.z * LANE_LOOKAHEAD);
             }
             catch
             {
@@ -352,24 +362,45 @@ namespace FootballAccessMod.Accessibility
         private static string PickLaneHint(int freeLeft, int freeMiddle, int freeRight,
                                            Component carrier, int power, string bestDir)
         {
+            if (string.IsNullOrEmpty(bestDir)) return "";
+
+            // Convert world-space zone name to carrier-relative direction.
+            // Zones are classified by world X: "left"=world −X, "right"=world +X.
+            // If the carrier faces south (fwd.z < 0), world −X is actually their right.
+            string spokenDir = WorldZoneToCarrierDir(carrier, bestDir);
+
             if (power <= 3)
             {
-                if (string.IsNullOrEmpty(bestDir)) return "";
                 int bestCount  = bestDir == "left" ? freeLeft : (bestDir == "right" ? freeRight : freeMiddle);
                 int worstCount = Math.Max(freeLeft, Math.Max(freeMiddle, freeRight));
                 if (worstCount - bestCount < 2) return "";
-                return $"Open {bestDir}.";
+                return $"Open {spokenDir}.";
             }
             if (power <= 6)
             {
-                return string.IsNullOrEmpty(bestDir) ? "" : $"Open {bestDir}.";
+                return $"Open {spokenDir}.";
             }
             // Power 7–9
-            if (string.IsNullOrEmpty(bestDir)) return "";
             string facing = GetCarrierFacingZone(carrier);
-            return facing == bestDir
-                ? $"Stay {bestDir} — lane open."
-                : $"Cut {bestDir}!";
+            return facing == spokenDir
+                ? $"Stay {spokenDir} — lane open."
+                : $"Cut {spokenDir}!";
+        }
+
+        // Converts a world-X zone name ("left"=−X, "right"=+X, "straight") into
+        // a carrier-relative direction so audio cues match what the player sees.
+        private static string WorldZoneToCarrierDir(Component carrier, string worldZone)
+        {
+            if (worldZone == "straight") return "straight";
+            try
+            {
+                // If carrier faces south (fwd.z < 0), world left/right are swapped.
+                float fwdZ = carrier.transform.forward.z;
+                bool flipped = fwdZ < 0f;
+                if (!flipped) return worldZone;
+                return worldZone == "left" ? "right" : "left";
+            }
+            catch { return worldZone; }
         }
 
         private static string GetCarrierFacingZone(Component carrier)

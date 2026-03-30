@@ -248,6 +248,11 @@ namespace FootballAccessMod.Accessibility
             if (_pollAccum < POLL_INTERVAL) return;
             _pollAccum = 0f;
 
+            // Suppress menu scanning entirely during active gameplay —
+            // Football Match UI being active means a game is in progress.
+            var matchUI = GameObject.Find("Football Match UI");
+            if (matchUI != null && matchUI.activeInHierarchy) return;
+
             // Init reflection once
             if (!_reflectionDone) InitPollReflection();
 
