@@ -47,6 +47,9 @@ namespace FootballAccessMod.Accessibility
         private static string _lastCurrentPlay        = "";
         private static bool   _l1WasDown              = false;
 
+        // Deferred route re-announce after audible — assignments propagate one poll later
+        private static bool   _pendingRouteAnnounce   = false;
+
         // Per-button open state for covered→open detection during the play
         private static readonly bool[] _buttonWasOpen = new bool[5];
 
@@ -98,10 +101,12 @@ namespace FootballAccessMod.Accessibility
 
             if (justEntered)
                 AnnounceReceivers();
-            else if (playState == "QBHasBall" && playType == "Pass")
+            else if (playState == "QBHasBall" && playType == "Pass"
+                     && (ModSettings.ReadReceiverChanges?.Value ?? true))
                 PollOpenChanges();  // announce any receiver that just became open
 
-            if (justPreSnap && !_routesAnnouncedThisPlay) AnnounceRoutes();
+            bool readRoutesAuto = ModSettings.ReadRoutesAuto?.Value ?? true;
+            if (justPreSnap && !_routesAnnouncedThisPlay && readRoutesAuto) AnnounceRoutes();
 
             // L1 repeat and audible re-announce during PreSnap
             if (playState == "PreSnap")
@@ -115,7 +120,8 @@ namespace FootballAccessMod.Accessibility
                 {
                     _lastCurrentPlay         = currentPlay;
                     _routesAnnouncedThisPlay = false;
-                    AnnounceRoutes();
+                    // Audible re-announce also respects ReadRoutesAuto (L1 manual repeat ignores it)
+                    if (ModSettings.ReadRoutesAuto?.Value ?? true) AnnounceRoutes();
                 }
             }
             else
@@ -123,7 +129,7 @@ namespace FootballAccessMod.Accessibility
                 _l1WasDown = false;
             }
 
-            CheckPlayArt();
+            if (ModSettings.ReadPlayArt?.Value ?? true) CheckPlayArt();
         }
 
         // ---- State management ----

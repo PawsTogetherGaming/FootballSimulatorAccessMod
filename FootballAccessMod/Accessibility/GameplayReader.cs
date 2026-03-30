@@ -44,6 +44,10 @@ namespace FootballAccessMod.Accessibility
         private static TextMeshProUGUI _tmpDefenseBoxTitle;
         private static TextMeshProUGUI _tmpDefFormationName;
 
+        // GameObjects cached so we can check activeInHierarchy
+        private static GameObject _offenseBox = null;
+        private static GameObject _defenseBox = null;
+
         // --- Playbook / play-name tracking via Reflection ---
         private static bool        _playbookRefsDone    = false;
         private static object      _playbookInst        = null; // Football.Playbook MonoBehaviour
@@ -101,6 +105,11 @@ namespace FootballAccessMod.Accessibility
         private static bool        _statusBtnWasDown    = false;
         private static bool        _tKeyWasDown         = false;
         private static bool        _sKeyWasDown         = false;
+        private static bool        _dKeyWasDown         = false;
+
+        // LB/RB bumper press tracking — announce formation name on each press
+        private static bool        _lbWasDown           = false;
+        private static bool        _rbWasDown           = false;
 
         public static void Poll()
         {
@@ -157,6 +166,27 @@ namespace FootballAccessMod.Accessibility
                 CheckCurrentPlay();
             CheckAudibles();
 
+            // LB / RB — announce current formation name on each press while either
+            // play-call box is visible (covers both depth 0 formation nav AND depth 1
+            // play selection, and audibles).
+            bool anyBoxVisible = (_offenseBox != null && _offenseBox.activeInHierarchy)
+                              || (_defenseBox != null && _defenseBox.activeInHierarchy)
+                              || _audiblesWasOpen;
+            if (anyBoxVisible)
+            {
+                bool lb = Input.GetKey(KeyCode.JoystickButton4);
+                bool rb = Input.GetKey(KeyCode.JoystickButton5);
+                if ((lb && !_lbWasDown) || (rb && !_rbWasDown))
+                {
+                    if (_audiblesWasOpen)
+                        AnnounceAudiblesNow();    // re-read current audible plays
+                    else
+                        AnnounceCurrentFormation();
+                }
+                _lbWasDown = lb;
+                _rbWasDown = rb;
+            }
+
             // Right stick click / R3 (JoystickButton9) — full status readout
             bool statusBtn = Input.GetKey(KeyCode.JoystickButton9);
             if (statusBtn && !_statusBtnWasDown) ReadOutStatus();
@@ -170,6 +200,11 @@ namespace FootballAccessMod.Accessibility
             bool sKey = Input.GetKey(KeyCode.S);
             if (sKey && !_sKeyWasDown) AnnounceScore();
             _sKeyWasDown = sKey;
+
+            bool dKey = Input.GetKey(KeyCode.D);
+            if (dKey && !_dKeyWasDown && !string.IsNullOrWhiteSpace(_lastDownDist))
+                SpeechManager.Speak(FormatDownDist(_lastDownDist));
+            _dKeyWasDown = dKey;
         }
 
         private static void ResetState()
@@ -206,6 +241,9 @@ namespace FootballAccessMod.Accessibility
             _statusBtnWasDown   = false;
             _tKeyWasDown        = false;
             _sKeyWasDown        = false;
+            _dKeyWasDown        = false;
+            _lbWasDown          = false;
+            _rbWasDown          = false;
             _playbookRefsDone = false;
             _playbookInst     = null;
             _tmpDownDist      = _tmpQuarter   = null;
@@ -213,6 +251,8 @@ namespace FootballAccessMod.Accessibility
             _tmpHomeName      = _tmpAwayName  = null;
             _tmpOffenseBoxTitle  = _tmpFormationName    = null;
             _tmpDefenseBoxTitle  = _tmpDefFormationName = null;
+            _offenseBox          = null;
+            _defenseBox          = null;
         }
 
         private static void CacheRefs()
@@ -252,7 +292,8 @@ namespace FootballAccessMod.Accessibility
             string dd = Clean(_tmpDownDist);
             if (string.IsNullOrWhiteSpace(dd) || dd == _lastDownDist) return;
             _lastDownDist = dd;
-            SpeechManager.Speak(FormatDownDist(dd));
+            if (ModSettings.ReadDDChanges?.Value ?? true)
+                SpeechManager.Speak(FormatDownDist(dd));
         }
 
         private static void CheckQuarter()
@@ -261,7 +302,8 @@ namespace FootballAccessMod.Accessibility
             if (string.IsNullOrWhiteSpace(q) || q == _lastQuarter) return;
             bool hadValue = !string.IsNullOrWhiteSpace(_lastQuarter);
             _lastQuarter = q;
-            if (hadValue) SpeechManager.Speak(FormatQuarter(q));
+            if (hadValue && (ModSettings.ReadQuarterChanges?.Value ?? true))
+                SpeechManager.Speak(FormatQuarter(q));
         }
 
         private static void CheckScore()
@@ -274,39 +316,50 @@ namespace FootballAccessMod.Accessibility
             _lastHomeScore = home;
             _lastAwayScore = away;
 
-            string homeName = Clean(_tmpHomeName);
-            string awayName = Clean(_tmpAwayName);
-            SpeechManager.Speak($"Score: {homeName} {home}, {awayName} {away}");
+            if (ModSettings.ReadScoreChanges?.Value ?? true)
+            {
+                string homeName = Clean(_tmpHomeName);
+                string awayName = Clean(_tmpAwayName);
+                SpeechManager.Speak($"Score: {homeName} {home}, {awayName} {away}");
+            }
         }
 
         private static void CheckPlayCall()
         {
             // One-time ref cache for OffenseBox + DefenseBox
-            if (_tmpOffenseBoxTitle == null)
+            if (_offenseBox == null)
             {
-                var obox = GameObject.Find("OffenseBox");
-                if (obox != null)
+                _offenseBox = GameObject.Find("OffenseBox");
+                if (_offenseBox != null)
                 {
-                    _tmpOffenseBoxTitle = FindTMPInChildren(obox, "Title");
-                    _tmpFormationName   = FindTMPInChildren(obox, "FormationName");
+                    _tmpOffenseBoxTitle = FindTMPInChildren(_offenseBox, "Title");
+                    _tmpFormationName   = FindTMPInChildren(_offenseBox, "FormationName");
                 }
             }
-            if (_tmpDefenseBoxTitle == null)
+            if (_defenseBox == null)
             {
-                var dbox = GameObject.Find("DefenseBox");
-                if (dbox != null)
+                _defenseBox = GameObject.Find("DefenseBox");
+                if (_defenseBox != null)
                 {
-                    _tmpDefenseBoxTitle  = FindTMPInChildren(dbox, "Title");
-                    _tmpDefFormationName = FindTMPInChildren(dbox, "FormationName");
+                    _tmpDefenseBoxTitle  = FindTMPInChildren(_defenseBox, "Title");
+                    _tmpDefFormationName = FindTMPInChildren(_defenseBox, "FormationName");
                 }
             }
+
+            // Only read title text when the box is actually visible —
+            // TMP components retain their last value when inactive, which causes
+            // false positives mid-play.
+            string offTitle = (_offenseBox != null && _offenseBox.activeInHierarchy)
+                ? Clean(_tmpOffenseBoxTitle) : "";
+            string defTitle = (_defenseBox != null && _defenseBox.activeInHierarchy)
+                ? Clean(_tmpDefenseBoxTitle) : "";
 
             // Lazily cache Playbook + OC + DC Reflection refs
             if (!_playbookRefsDone) CachePlaybookRefs();
 
             bool offWasOpen = _playCallOpen;
             CheckOneSide(
-                title:         Clean(_tmpOffenseBoxTitle),
+                title:         offTitle,
                 playKeyword:   "Offense Play",
                 formKeyword:   "Offense Formation",
                 formationTmp:  _tmpFormationName,
@@ -328,7 +381,7 @@ namespace FootballAccessMod.Accessibility
             if (offJustOpened) return;
 
             CheckOneSide(
-                title:         Clean(_tmpDefenseBoxTitle),
+                title:         defTitle,
                 playKeyword:   "Defense Play",
                 formKeyword:   "Defense Formation",
                 formationTmp:  _tmpDefFormationName,
@@ -400,9 +453,11 @@ namespace FootballAccessMod.Accessibility
                     lastPlayCol  = col;
                     string pageDesc = GetPageNamesLabeled(fldPlayList, page);
                     lastPlayName = GetPlayAt(fldPlayList, page, col);
-                    SpeechManager.Speak(string.IsNullOrWhiteSpace(pageDesc)
-                        ? $"{dd}. {formation}. {lastPlayName}."
-                        : $"{dd}. {formation}. {pageDesc}.");
+                    bool readTooltips = ModSettings.ReadTooltips?.Value ?? true;
+                    if (readTooltips)
+                        SpeechManager.Speak(string.IsNullOrWhiteSpace(pageDesc)
+                            ? $"{dd}. {formation}. {lastPlayName}."
+                            : $"{dd}. {formation}. {pageDesc}.");
                 }
                 else
                 {
@@ -410,7 +465,9 @@ namespace FootballAccessMod.Accessibility
                     lastPlayPage = -1;
                     lastPlayCol  = -1;
                     lastPlayName = "";
-                    SpeechManager.Speak($"{dd}. Select formation. {formation}.");
+                    bool readTooltips = ModSettings.ReadTooltips?.Value ?? true;
+                    if (readTooltips)
+                        SpeechManager.Speak($"{dd}. Select formation. {formation}.");
                 }
                 return;
             }
@@ -460,7 +517,8 @@ namespace FootballAccessMod.Accessibility
 
                     Plugin.Log.LogInfo($"[GameplayReader] returnedFromPlay ({sideLabel}): savedPlay=\"{savedPlayName}\" confirmCol={confirmCol} announced=\"{announced}\"");
 
-                    if (!string.IsNullOrWhiteSpace(announced))
+                    bool readSelectedPlay = ModSettings.ReadSelectedPlay?.Value ?? true;
+                    if (!string.IsNullOrWhiteSpace(announced) && readSelectedPlay)
                     {
                         SpeechManager.Speak(BuildPlayAnnouncement(announced, sideLabel));
                         // Suppress CheckCurrentPlay from re-announcing the same play at snap time
@@ -471,7 +529,9 @@ namespace FootballAccessMod.Accessibility
                     // Re-announce formation + DD so the user knows they're back at formation nav
                     lastFormation = formation;
                     string dd = FormatDownDist(_lastDownDist);
-                    SpeechManager.Speak($"{dd}. Select formation. {formation}.");
+                    bool readTooltips2 = ModSettings.ReadTooltips?.Value ?? true;
+                    if (readTooltips2)
+                        SpeechManager.Speak($"{dd}. Select formation. {formation}.");
                     // Seed so stale button state from the play press doesn't misfire next time
                     SeedButtonStates();
                     return;
@@ -479,7 +539,9 @@ namespace FootballAccessMod.Accessibility
                 if (!string.IsNullOrWhiteSpace(formation) && formation != lastFormation)
                 {
                     lastFormation = formation;
-                    SpeechManager.Speak($"Formation: {formation}");
+                    bool readTooltips3 = ModSettings.ReadTooltips?.Value ?? true;
+                    if (readTooltips3)
+                        SpeechManager.Speak($"Formation: {formation}");
                 }
                 return;
             }
@@ -522,6 +584,9 @@ namespace FootballAccessMod.Accessibility
 
         private static void CheckCurrentPlay()
         {
+            bool readSelectedPlay = ModSettings.ReadSelectedPlay?.Value ?? true;
+            if (!readSelectedPlay) return;
+
             if (_fldOcCurrentPlay != null && _ocInst != null)
             {
                 string name = CleanPlayName(_fldOcCurrentPlay.GetValue(_ocInst)?.ToString() ?? "");
@@ -626,6 +691,41 @@ namespace FootballAccessMod.Accessibility
             string text = sb.ToString().Trim();
             if (!string.IsNullOrWhiteSpace(text))
                 SpeechManager.Speak(text);
+        }
+
+        // Re-reads the current audible plays on demand (called on LB/RB press during audibles).
+        private static void AnnounceAudiblesNow()
+        {
+            if (_playbookInst == null) return;
+            int page = 0;
+            try { page = (int)(_fldPage?.GetValue(_playbookInst) ?? 0); } catch { }
+
+            string x = GetPlayAt(_fldPlayList, page, 0);
+            string a = GetPlayAt(_fldPlayList, page, 1);
+            string b = GetPlayAt(_fldPlayList, page, 2);
+
+            var sb = new System.Text.StringBuilder("Audibles.");
+            if (!string.IsNullOrWhiteSpace(x)) sb.Append($" X: {x}.");
+            if (!string.IsNullOrWhiteSpace(a)) sb.Append($" A: {a}.");
+            if (!string.IsNullOrWhiteSpace(b)) sb.Append($" B: {b}.");
+            SpeechManager.Speak(sb.ToString().Trim());
+        }
+
+        private static void AnnounceCurrentFormation()
+        {
+            // Announce whichever play-call box is currently open
+            if (_playCallOpen)
+            {
+                string f = Clean(_tmpFormationName);
+                if (!string.IsNullOrWhiteSpace(f))
+                { SpeechManager.Speak(f); return; }
+            }
+            if (_defPlayCallOpen)
+            {
+                string f = Clean(_tmpDefFormationName);
+                if (!string.IsNullOrWhiteSpace(f))
+                { SpeechManager.Speak(f); return; }
+            }
         }
 
         private static void AnnounceTimeRemaining()

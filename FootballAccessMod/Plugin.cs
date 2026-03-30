@@ -19,6 +19,7 @@ namespace FootballAccessMod
     {
         internal static ManualLogSource Log = null!;
         private Harmony _harmony = null!;
+        internal static Harmony HarmonyInstance = null!;
 
         // ---- Selection polling (runs in Plugin.Update so we know it fires) ----
         private Type?     _uiButtonType;
@@ -33,6 +34,7 @@ namespace FootballAccessMod
         {
             Log = Logger;
             Log.LogInfo($"{PluginInfo.PLUGIN_NAME} v{PluginInfo.PLUGIN_VERSION} loading...");
+            ModSettings.Init(Config);
 
             try
             {
@@ -43,7 +45,8 @@ namespace FootballAccessMod
 
                 FranchiseReader.Initialize();
 
-                _harmony = new Harmony(PluginInfo.PLUGIN_GUID);
+                _harmony      = new Harmony(PluginInfo.PLUGIN_GUID);
+                HarmonyInstance = _harmony;
                 MenuReader.ApplyPatches(_harmony);
                 PlaybookReader.ApplyPatches(_harmony);
 
@@ -130,9 +133,18 @@ namespace FootballAccessMod
             if (f11 && !_dumpKeyWasDown) { DumpSceneToFile("MANUAL"); SpeechManager.Speak("Dumped."); }
             _dumpKeyWasDown = f11;
 
+            // Per-frame input polling (must run before the throttle gate)
+            SettingsMenuReader.PollInput();
+            if (SettingsMenuReader.IsOpen) return;  // suppress all other input while settings are open
+            HowToPlayReader.PollInput();
+            TeamSelectReader.PollInput();
+
             _loopPollAccum += Time.unscaledDeltaTime;
             if (_loopPollAccum < 0.12f) return;
             _loopPollAccum = 0f;
+
+            // Settings menu takes over input — skip all gameplay/screen readers while open
+            if (SettingsMenuReader.IsOpen) return;
 
             if (!_loopReflectionDone) InitLoopReflection();
 
@@ -179,7 +191,11 @@ namespace FootballAccessMod
             SeasonHubReader.Poll();
             RosterReader.Poll();
             GameplayReader.Poll();
+            DefenseReader.Poll();
+            OffenseProximityReader.Poll();
+            OffensiveAssistReader.Poll();
             ReceiverReader.Poll();
+            KickingReader.Poll();
 
             // UIButton / UIButtonLinker / UIButtonStretch fallback
             // Suppress UIButton/Linker when roster popup is open — the player row button
