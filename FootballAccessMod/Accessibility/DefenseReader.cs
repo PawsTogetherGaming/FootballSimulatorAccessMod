@@ -76,6 +76,13 @@ namespace FootballAccessMod.Accessibility
         private static bool   _ballInAirAnnounced          = false;
         private static bool   _defenderOnItAnnounced       = false;
 
+        // Defender-switch debounce — queues the announcement and only fires it
+        // after the selected player has been stable for SWITCH_SETTLE seconds.
+        // This prevents NVDA stutter when the user rapidly cycles through players.
+        private static string _pendingPlayerAnnouncement   = "";
+        private static float  _pendingPlayerTime           = -1f;
+        private const  float  SWITCH_SETTLE               = 0.3f;
+
         // Ball direction updates
         private static float  _lastDirTime                 = -10f;
         private const  float  BALL_DIR_INTERVAL            = 0.4f;
@@ -193,6 +200,16 @@ namespace FootballAccessMod.Accessibility
                 }
             }
 
+            // Fire pending player-switch announcement once selection has settled
+            if (!string.IsNullOrEmpty(_pendingPlayerAnnouncement)
+                && Time.unscaledTime >= _pendingPlayerTime)
+            {
+                if (ModSettings.ReadDefenderSwitch?.Value ?? true)
+                    SpeechManager.Speak(_pendingPlayerAnnouncement);
+                _pendingPlayerAnnouncement = "";
+                _pendingPlayerTime         = -1f;
+            }
+
             // L3 on-demand position readout
             bool l3 = Input.GetKey(KeyCode.JoystickButton8);
             if (l3 && !_l3WasDown && _lastSelectedPlayerRef != null)
@@ -266,7 +283,10 @@ namespace FootballAccessMod.Accessibility
             var sb = new System.Text.StringBuilder(name).Append('.');
             if (!string.IsNullOrEmpty(target))   sb.Append(' ').Append(target).Append('.');
             if (!string.IsNullOrEmpty(fieldPos)) sb.Append(' ').Append(fieldPos).Append('.');
-            SpeechManager.Speak(sb.ToString());
+
+            // Queue the announcement — fire only after player selection settles
+            _pendingPlayerAnnouncement = sb.ToString();
+            _pendingPlayerTime         = Time.unscaledTime + SWITCH_SETTLE;
         }
 
         // ---- Behavior state change ----
@@ -810,6 +830,8 @@ namespace FootballAccessMod.Accessibility
             _lastDirTime                 = -10f;
             _l3WasDown                   = false;
             _r1WasActive                 = false;
+            _pendingPlayerAnnouncement   = "";
+            _pendingPlayerTime           = -1f;
             _reflDone                    = false;
             _matchInst                   = null;
             VibrationManager.Stop();

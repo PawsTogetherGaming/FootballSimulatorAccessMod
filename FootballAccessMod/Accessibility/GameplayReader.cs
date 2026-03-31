@@ -111,6 +111,57 @@ namespace FootballAccessMod.Accessibility
         private static bool        _lbWasDown           = false;
         private static bool        _rbWasDown           = false;
 
+        // =========================================================
+        // PollInput — every Unity frame, before the 120ms throttle.
+        // Announces the selected play the instant X/A/Y is pressed
+        // at play-selection depth, so the 120ms Poll() never misses it.
+        // =========================================================
+
+        public static void PollInput()
+        {
+            if (!_wasInGame) return;
+            if (!_playCallOpen && !_defPlayCallOpen) return;
+            if (!_playbookRefsDone || _playbookInst == null) return;
+
+            // Determine which side is open and what depth we're at
+            bool isDefense = _defPlayCallOpen && !_playCallOpen;
+            int depth = 0;
+            int page  = 0;
+            try
+            {
+                var fldD = isDefense ? _fldDefDepth : _fldDepth;
+                var fldP = isDefense ? _fldDefPage  : _fldPage;
+                depth = (int)(fldD?.GetValue(_playbookInst) ?? 0);
+                page  = (int)(fldP?.GetValue(_playbookInst) ?? 0);
+            }
+            catch { return; }
+
+            if (depth != 1) return;   // only at play-selection depth
+
+            // X = col 0, A = col 1, Y = col 2
+            int col = -1;
+            if (Input.GetKeyDown(KeyCode.JoystickButton2)) col = 0; // X
+            else if (Input.GetKeyDown(KeyCode.JoystickButton0)) col = 1; // A
+            else if (Input.GetKeyDown(KeyCode.JoystickButton3)) col = 2; // Y
+            if (col < 0) return;
+
+            if (!(ModSettings.ReadSelectedPlay?.Value ?? true)) return;
+
+            var fldList = isDefense ? _fldDefPlayList : _fldPlayList;
+            string playName = GetPlayAt(fldList, page, col);
+            if (string.IsNullOrWhiteSpace(playName)) return;
+
+            string side = isDefense ? "defense" : "offense";
+            SpeechManager.Speak(BuildPlayAnnouncement(playName, side));
+            Plugin.Log.LogInfo($"[GameplayReader] PollInput: play selected '{playName}' col={col} side={side}");
+
+            // Suppress the 120ms Poll() from re-announcing the same play
+            if (isDefense) _lastCalledDefPlay = playName;
+            else           _lastCalledPlay    = playName;
+        }
+
+        // =========================================================
+
         public static void Poll()
         {
             // Gameplay is active when GameplayMenu_Canvas is present and active,

@@ -138,6 +138,7 @@ namespace FootballAccessMod
             if (SettingsMenuReader.IsOpen) return;  // suppress all other input while settings are open
             HowToPlayReader.PollInput();
             TeamSelectReader.PollInput();
+            GameplayReader.PollInput();
 
             _loopPollAccum += Time.unscaledDeltaTime;
             if (_loopPollAccum < 0.12f) return;

@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 using FootballAccessMod.Speech;
 
 namespace FootballAccessMod.Accessibility
@@ -34,6 +35,10 @@ namespace FootballAccessMod.Accessibility
 
         // Heartbeat — logs button state once per second while menu is open
         private static float _heartbeatTimer = 0f;
+
+        // EventSystem suppression — saves the game's selected UI object so we
+        // can restore it exactly when the mod menu closes.
+        private static GameObject _savedSelectedObject = null;
 
         // ---- Setting definitions ----
         // Order shown in the menu — grouped by category.
@@ -284,6 +289,14 @@ namespace FootballAccessMod.Accessibility
             IsOpen = true;
             _focus = 0;
             _heartbeatTimer = 0f;
+
+            // Freeze the game's menu cursor so D-pad can't move it while we're open.
+            var es = EventSystem.current;
+            if (es != null)
+            {
+                _savedSelectedObject = es.currentSelectedGameObject;
+                es.enabled = false;
+            }
             var s = Settings[_focus];
             Plugin.Log.LogInfo($"[SettingsMenu] Open() called. Settings.Length={Settings.Length} firstName={s.Name}");
             try { System.IO.File.AppendAllText(@"C:\football\speech_log.txt",
@@ -302,6 +315,17 @@ namespace FootballAccessMod.Accessibility
             _backWasDown    = false;
             _backHeld       = 0f;
             _heartbeatTimer = 0f;
+
+            // Restore the game's EventSystem and cursor position.
+            var es = EventSystem.current;
+            if (es != null)
+            {
+                es.enabled = true;
+                if (_savedSelectedObject != null)
+                    es.SetSelectedGameObject(_savedSelectedObject);
+                _savedSelectedObject = null;
+            }
+
             SpeechManager.Speak("Mod settings closed.");
         }
 
