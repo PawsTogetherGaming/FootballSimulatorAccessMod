@@ -45,10 +45,28 @@ namespace FootballAccessMod.Accessibility
         private static FieldInfo _fldAssignmentPathComplete = null;
         private static FieldInfo _fldBehaviorState        = null;
         private static MethodInfo _methSetBehaviorState   = null;
+        private static FieldInfo _fldClosestDefenderDist  = null;
+        private static FieldInfo _fldClosestDefender      = null;
+        private static FieldInfo _fldLastTimeTouched      = null;
 
         // FootballPlayerLogic → character → controlState
         private static FieldInfo _fldCharacter            = null;
         private static FieldInfo _fldControlState         = null;
+
+        // character → characterActions → evasion methods
+        private static FieldInfo  _fldCharacterActions    = null;
+        private static MethodInfo _methSpeedBoost         = null;
+        private static MethodInfo _methStiffArm           = null;
+        private static MethodInfo _methPowerRush          = null;
+        private static MethodInfo _methDive               = null;
+
+        // character → animator (for cooldown checks)
+        private static FieldInfo  _fldAnimator            = null;
+
+        // Human-side guard: oc.gc.isAI — true means CPU controls offense this possession
+        private static FieldInfo _fldOc                   = null;   // FootballMatch.oc
+        private static FieldInfo _fldOcGc                 = null;   // OffensiveCoordinator.gc
+        private static FieldInfo _fldGcIsAI               = null;   // GameController.isAI
 
         // Enum values
         private static object    _enumAIInControl         = null;
@@ -61,6 +79,8 @@ namespace FootballAccessMod.Accessibility
         private static string _lastHint                   = "";
         private static float  _lastHintTime               = -10f;
         private static bool   _laneOpenVibrated           = false;
+        private static float  _lastBoostTime              = -10f;
+        private static float  _lastEvasionTime            = -10f;
 
         // Cooldown range (seconds)
         private const float HINT_COOLDOWN_MAX             = 3.5f;  // power 1
@@ -103,6 +123,32 @@ namespace FootballAccessMod.Accessibility
 
             if (!EnsureRefs()) return;
             _wasInGame = true;
+
+            // Guard: only apply offensive assist when the offense is human-controlled.
+            // oc.gc.isAI == true means the CPU is controlling the offense this possession.
+            // Fail closed: if we can't verify the human is on offense, don't run assists.
+            {
+                bool humanOnOffense = false;
+                if (_fldOc != null && _fldOcGc != null && _fldGcIsAI != null)
+                {
+                    try
+                    {
+                        object oc = _fldOc.GetValue(_matchInst);
+                        if (oc != null)
+                        {
+                            object gc = _fldOcGc.GetValue(oc);
+                            if (gc != null)
+                                humanOnOffense = !(bool)(_fldGcIsAI.GetValue(gc) ?? true);
+                        }
+                    }
+                    catch { }
+                }
+                if (!humanOnOffense)
+                {
+                    if (_assistActive) ReleaseControl();
+                    return;
+                }
+            }
 
             string playState = "";
             try { playState = _fldPlayState?.GetValue(_matchInst)?.ToString() ?? ""; }
@@ -230,7 +276,14 @@ namespace FootballAccessMod.Accessibility
             try { charInst = _fldCharacter?.GetValue(logic); } catch { }
             if (charInst == null) { if (_assistActive) ReleaseControl(); return; }
 
-            // Engage AI control
+            // Engage AI control — let the game's own AIRunWithBall() handle movement.
+            // We set AssignmentPathComplete=true and clear AssignmentTargets so that
+            // ProcessAssignment() skips the manual target-following code and falls
+            // through to AIRunWithBall(), which:
+            //   - uses GetTowardEndzone() for the correct direction
+            //   - evades defenders automatically
+            //   - performs stiff arms and power rushes
+            //   - has a safety check that prevents running backward
             try
             {
                 _fldAllowPlayerControl?.SetValue(logic, false);
@@ -240,6 +293,12 @@ namespace FootballAccessMod.Accessibility
                     _methSetBehaviorState.Invoke(logic, new[] { _enumRunningWithBall });
                 else if (_fldBehaviorState != null && _enumRunningWithBall != null)
                     _fldBehaviorState.SetValue(logic, _enumRunningWithBall);
+
+                // Clear targets and mark path complete so the game routes into
+                // AIRunWithBall() instead of MoveTowardVector().
+                _fldAssignmentPathComplete?.SetValue(logic, true);
+                var targets = _fldAssignmentTargets?.GetValue(logic) as List<Vector3>;
+                targets?.Clear();
             }
             catch (Exception ex)
             {
@@ -247,64 +306,130 @@ namespace FootballAccessMod.Accessibility
                 return;
             }
 
-            // Build target position in the best open lane
-            Vector3 targetPos = BuildLaneTarget(carrier, bestDir);
-
-            // Write AssignmentTargets so the AI movement loop runs
-            try
-            {
-                var targets = _fldAssignmentTargets?.GetValue(logic) as List<Vector3>;
-                if (targets != null)
-                {
-                    targets.Clear();
-                    targets.Add(targetPos);
-                }
-                _fldAssignmentPathComplete?.SetValue(logic, false);
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.LogWarning($"[OffensiveAssistReader] ApplyAssist targets: {ex.Message}");
-            }
-
             if (!_assistActive)
             {
                 _assistActive = true;
                 SpeechManager.Speak("Run assist on.");
             }
+
+            // ---- Active play-making: speed boost + evasion moves ----
+            TriggerActions(logic, charInst, carrier);
+        }
+
+        // Triggers speed boost when the field is open, and evasion moves
+        // (stiff arm, power rush, dive) when defenders are close.
+        private static void TriggerActions(object logic, object charInst, Component carrier)
+        {
+            // Read closest defender distance from logic
+            float defDist = 1000f;
+            try { defDist = (float)(_fldClosestDefenderDist?.GetValue(logic) ?? 1000f); } catch { }
+
+            // Get characterActions object for triggering moves
+            object actions = null;
+            try { actions = _fldCharacterActions?.GetValue(charInst); } catch { }
+            if (actions == null) return;
+
+            // ---- Speed boost when no defenders nearby ----
+            if (defDist > 8f && (Time.unscaledTime - _lastBoostTime) > 2f)
+            {
+                try
+                {
+                    _methSpeedBoost?.Invoke(actions, null);
+                    _lastBoostTime = Time.unscaledTime;
+                }
+                catch { }
+            }
+
+            // ---- Evasion moves when a defender is closing in ----
+            if (defDist > 4f) return;   // only act when defender is within 4m
+            if ((Time.unscaledTime - _lastEvasionTime) < 0.5f) return;  // cooldown
+
+            // Check animator bools to avoid triggering during an active move.
+            // Use reflection to call GetBool since UnityEngine.AnimationModule may not be referenced.
+            object animator = null;
+            try { animator = _fldAnimator?.GetValue(charInst); } catch { }
+            if (animator != null)
+            {
+                try
+                {
+                    var getBoolMethod = animator.GetType().GetMethod("GetBool",
+                        new[] { typeof(string) });
+                    if (getBoolMethod != null)
+                    {
+                        bool inStiff = (bool)(getBoolMethod.Invoke(animator, new object[] { "InStiffArm" }) ?? false);
+                        bool inRush  = (bool)(getBoolMethod.Invoke(animator, new object[] { "InPowerRush" }) ?? false);
+                        if (inStiff || inRush) return;
+                    }
+                }
+                catch { }
+            }
+
+            // Check last-touched cooldown (mirrors game's logic)
+            float lastTouched = 0f;
+            try { lastTouched = (float)(_fldLastTimeTouched?.GetValue(logic) ?? 0f); } catch { }
+
+            // Determine defender direction relative to carrier
+            Component defComp = null;
+            try
+            {
+                object defObj = _fldClosestDefender?.GetValue(logic);
+                defComp = defObj as Component;
+            }
+            catch { }
+
+            if (defComp != null)
+            {
+                Vector3 toDefender = defComp.transform.position - carrier.transform.position;
+
+                // Defender coming from the side → stiff arm toward them
+                if (Mathf.Abs(toDefender.x) > Mathf.Abs(toDefender.z + 0.1f)
+                    && (Time.time - lastTouched) > 1f)
+                {
+                    try
+                    {
+                        bool isLeft = toDefender.x < 0f;
+                        _methStiffArm?.Invoke(actions, new object[] { isLeft });
+                        _lastEvasionTime = Time.unscaledTime;
+                        return;
+                    }
+                    catch { }
+                }
+
+                // Defender ahead → power rush / truck
+                if ((Time.time - lastTouched) > 0.5f)
+                {
+                    try
+                    {
+                        _methPowerRush?.Invoke(actions, null);
+                        _lastEvasionTime = Time.unscaledTime;
+                        return;
+                    }
+                    catch { }
+                }
+            }
         }
 
         // Calculates a world-space waypoint in the chosen lane, LANE_LOOKAHEAD metres ahead.
-        // Uses carrier.transform.forward (XZ-projected) so the target is always in front of
-        // the carrier regardless of which end zone the offense is attacking.
+        // Uses isHomeDefense to determine downfield Z direction — this is reliable regardless
+        // of which way the carrier's model is facing (spin moves, cuts, handoff animations
+        // can all cause transform.forward to point toward the wrong end zone).
         private static Vector3 BuildLaneTarget(Component carrier, string bestDir)
         {
             try
             {
                 Vector3 pos = carrier.transform.position;
 
-                // Project carrier facing onto XZ plane — this is the true "downfield" direction.
-                Vector3 fwd = carrier.transform.forward;
-                fwd.y = 0f;
-                if (fwd.sqrMagnitude < 0.01f)
-                {
-                    // Fallback: derive from isHomeDefense if the model has no facing yet.
-                    // isHomeDefense=true  → away is on offense → going south (−Z)
-                    // isHomeDefense=false → home is on offense → going north (+Z)
-                    bool ihd = false;
-                    try { ihd = (bool)(_fldIsHomeDefense?.GetValue(_matchInst) ?? false); } catch { }
-                    fwd = new Vector3(0f, 0f, ihd ? -1f : 1f);
-                }
-                fwd.Normalize();
+                // isHomeDefense=true  → away is on offense → going south (−Z)
+                // isHomeDefense=false → home is on offense → going north (+Z)
+                bool ihd = false;
+                try { ihd = (bool)(_fldIsHomeDefense?.GetValue(_matchInst) ?? false); } catch { }
+                float downfieldZ = ihd ? -1f : 1f;
 
-                // Lateral offset: zones are classified in world-X space.
-                // When fwd.z > 0 (going north): world −X = carrier's left, +X = carrier's right.
-                // When fwd.z < 0 (going south): world +X = carrier's left, −X = carrier's right.
-                // We use world-X zone centres directly — the AI just needs to reach a clear lane.
                 float lateralX = bestDir == "left"  ? -LANE_OFFSET_SIDE
                                : bestDir == "right" ?  LANE_OFFSET_SIDE
                                : pos.x;   // "straight" — keep current X
 
-                return new Vector3(lateralX, pos.y, pos.z + fwd.z * LANE_LOOKAHEAD);
+                return new Vector3(lateralX, pos.y, pos.z + downfieldZ * LANE_LOOKAHEAD);
             }
             catch
             {
@@ -485,6 +610,16 @@ namespace FootballAccessMod.Accessibility
                     _fldDefensivePlayers = matchType.GetField("defensivePlayers",  flags);
                     _fldIsHomeDefense    = matchType.GetField("isHomeDefense",     flags);
 
+                    // Cache oc → gc → isAI for human-side guard
+                    _fldOc = matchType.GetField("oc", flags);
+                    if (_fldOc != null)
+                    {
+                        var ocType = _fldOc.FieldType;
+                        _fldOcGc = ocType.GetField("gc", flags);
+                        if (_fldOcGc != null)
+                            _fldGcIsAI = _fldOcGc.FieldType.GetField("isAI", flags);
+                    }
+
                     // FootballPlayer → logic → all needed fields
                     if (_fldPlayerWithBall != null)
                     {
@@ -501,6 +636,9 @@ namespace FootballAccessMod.Accessibility
                             _fldAssignmentPathComplete= fplType.GetField("AssignmentPathComplete", flags);
                             _fldBehaviorState         = fplType.GetField("behaviorState",        flags);
                             _fldCharacter             = fplType.GetField("character",            flags);
+                            _fldClosestDefenderDist   = fplType.GetField("ClosestDefenderDistance", flags);
+                            _fldClosestDefender       = fplType.GetField("ClosestDefender",      flags);
+                            _fldLastTimeTouched       = fplType.GetField("LastTimeTouchedByDefender", flags);
 
                             _methSetBehaviorState = fplType.GetMethod("SetBehaviorState",
                                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -529,6 +667,40 @@ namespace FootballAccessMod.Accessibility
                                     try { _enumAIInControl    = Enum.Parse(csType, "AIInControl");     } catch { }
                                     try { _enumPlayerInControl= Enum.Parse(csType, "PlayerInControl"); } catch { }
                                 }
+
+                                // character → animator
+                                _fldAnimator = charType.GetField("animator", flags);
+                                // Walk up base types if needed
+                                t = charType;
+                                while (t != null && _fldAnimator == null)
+                                {
+                                    _fldAnimator = t.GetField("animator", flags);
+                                    t = t.BaseType;
+                                }
+
+                                // character → characterActions → evasion methods
+                                _fldCharacterActions = charType.GetField("characterActions", flags);
+                                if (_fldCharacterActions == null)
+                                {
+                                    // Walk base types
+                                    t = charType.BaseType;
+                                    while (t != null && _fldCharacterActions == null)
+                                    {
+                                        _fldCharacterActions = t.GetField("characterActions", flags);
+                                        t = t.BaseType;
+                                    }
+                                }
+                                if (_fldCharacterActions != null)
+                                {
+                                    var caType = _fldCharacterActions.FieldType;
+                                    _methSpeedBoost = caType.GetMethod("SpeedBoost", flags);
+                                    _methStiffArm   = caType.GetMethod("StiffArm",   flags);
+                                    _methPowerRush  = caType.GetMethod("PowerRush",  flags);
+                                    _methDive       = caType.GetMethod("Dive",       flags, null, Type.EmptyTypes, null);
+                                    // Dive has overloads — get the parameterless one
+                                    if (_methDive == null)
+                                        _methDive = caType.GetMethod("Dive", flags);
+                                }
                             }
                         }
                     }
@@ -542,7 +714,10 @@ namespace FootballAccessMod.Accessibility
                         $"assignTargets={_fldAssignmentTargets != null} " +
                         $"character={_fldCharacter != null} controlState={_fldControlState != null} " +
                         $"AIInControl={_enumAIInControl != null} PlayerInControl={_enumPlayerInControl != null} " +
-                        $"RunningWithBall={_enumRunningWithBall != null}");
+                        $"RunningWithBall={_enumRunningWithBall != null} " +
+                        $"charActions={_fldCharacterActions != null} speedBoost={_methSpeedBoost != null} " +
+                        $"stiffArm={_methStiffArm != null} powerRush={_methPowerRush != null} " +
+                        $"closestDefDist={_fldClosestDefenderDist != null} animator={_fldAnimator != null}");
                     break;
                 }
             }

@@ -62,6 +62,12 @@ namespace FootballAccessMod.Accessibility
         private static FieldInfo _fldAssignmentTargets      = null;  // logic.AssignmentTargets (List<Vector3>)
         private static FieldInfo _fldAssignmentPathComplete = null;  // logic.AssignmentPathComplete (bool)
 
+        // Ball hawk: instant reaction to thrown ball
+        private static FieldInfo _fldThrownBallReactCounter = null;  // logic.thrownBallReactCounter (int)
+
+        // Human-side guard: gc.isAI — true means the defense is CPU-controlled
+        private static FieldInfo _fldGcIsAI                 = null;  // GameController.isAI (bool)
+
         // Cached enum values (resolved once)
         private static object    _enumAIInControl       = null;
         private static object    _enumPlayerInControl   = null;
@@ -188,8 +194,15 @@ namespace FootballAccessMod.Accessibility
             }
             else
             {
-                _lastSelectedPlayerRef       = null;
-                _lastControlledBehaviorState = "";
+                // Only wipe the tracked player when NO active play is running.
+                // During PreSnap (activePlay=true, ballInMotion=false) we must keep
+                // _lastSelectedPlayerRef so the debounce timer can fire without being
+                // reset every 120 ms by this block.
+                if (!activePlay)
+                {
+                    _lastSelectedPlayerRef       = null;
+                    _lastControlledBehaviorState = "";
+                }
                 VibrationManager.Stop();
 
                 // Release heat-seek if play ended while R1 was held
@@ -385,6 +398,32 @@ namespace FootballAccessMod.Accessibility
             int power = ModSettings.HeatSeekPower?.Value ?? 5;
             if (power == 0) return;  // disabled
 
+            // Guard: only apply heat-seek when the defense is human-controlled.
+            // dc.gc.isAI == true means the CPU is controlling the defense this possession.
+            // Fail closed: if we can't verify, don't run heat-seek.
+            {
+                bool humanOnDefense = false;
+                if (_fldGcIsAI != null && _fldDc != null && _fldDcGc != null)
+                {
+                    try
+                    {
+                        object dc = _fldDc.GetValue(_matchInst);
+                        if (dc != null)
+                        {
+                            object gc = _fldDcGc.GetValue(dc);
+                            if (gc != null)
+                                humanOnDefense = !(bool)(_fldGcIsAI.GetValue(gc) ?? true);
+                        }
+                    }
+                    catch { }
+                }
+                if (!humanOnDefense)
+                {
+                    if (_r1WasActive) { _r1WasActive = false; RestorePlayerControl(); }
+                    return;
+                }
+            }
+
             bool r1 = Input.GetKey(KeyCode.JoystickButton5);
 
             // Power 10 auto-activations (no R1 required):
@@ -453,38 +492,37 @@ namespace FootballAccessMod.Accessibility
                 if (charInst == null) return;
 
                 // Block the game from returning player control when the left stick is moved.
-                // Without this, ProcessGivePlayerControl() immediately overrides AIInControl
-                // the moment the player touches the stick.
                 _fldAllowPlayerControl?.SetValue(logic, false);
 
                 // Switch to AI control
                 _fldControlState.SetValue(charInst, _enumAIInControl);
 
-                // Set appropriate behavior state (RunPursuit also calls FaceBall so the
-                // character turns to face the carrier — TryingToCatch handles the ball-in-air case).
-                object targetState = (playState == "BallInAir" || playState == "BallTipped")
-                    ? _enumTryingToCatch
-                    : _enumRunPursuit;
-
-                if (targetState != null && _methSetBehaviorState != null)
-                    _methSetBehaviorState.Invoke(logic, new[] { targetState });
-                else if (targetState != null && _fldBehaviorState != null)
-                    _fldBehaviorState.SetValue(logic, targetState);
-
-                // Drive movement: set AssignmentTargets to the current ball/carrier position
-                // and mark the path as incomplete so the AI's MoveTowardVector loop runs.
-                // We refresh this every poll so the defender tracks the target dynamically.
+                // Clear AssignmentTargets and mark path complete so ProcessAssignment()
+                // falls through to the behavior-specific AI code (RunPursuit, catch pursuit, etc.)
+                // instead of running MoveTowardVector which overrides the game's smart pursuit.
                 if (_fldAssignmentTargets != null && _fldAssignmentPathComplete != null)
                 {
-                    Vector3 targetPos = GetHeatSeekTarget(comp, playState);
                     var targets = _fldAssignmentTargets.GetValue(logic)
                                   as System.Collections.Generic.List<Vector3>;
-                    if (targets != null)
-                    {
-                        targets.Clear();
-                        targets.Add(targetPos);
-                    }
-                    _fldAssignmentPathComplete.SetValue(logic, false);
+                    targets?.Clear();
+                    _fldAssignmentPathComplete.SetValue(logic, true);
+                }
+
+                if (playState == "BallInAir" || playState == "BallTipped")
+                {
+                    // Ball hawk: set thrownBallReactCounter=0 so the game's own
+                    // DelayedProcessBallThrown fires immediately. This sets up
+                    // RunningTowardBallLandingSpot → TryingToCatchBallInAir,
+                    // which runs the defender to the catch point and attempts the INT.
+                    _fldThrownBallReactCounter?.SetValue(logic, 0);
+                }
+                else
+                {
+                    // Run play: set RunPursuit so the game's AI pursues the ball carrier.
+                    if (_enumRunPursuit != null && _methSetBehaviorState != null)
+                        _methSetBehaviorState.Invoke(logic, new[] { _enumRunPursuit });
+                    else if (_enumRunPursuit != null && _fldBehaviorState != null)
+                        _fldBehaviorState.SetValue(logic, _enumRunPursuit);
                 }
             }
             catch (Exception ex)
@@ -882,6 +920,7 @@ namespace FootballAccessMod.Accessibility
                         {
                             var gcType = _fldDcGc.FieldType;
                             _fldGcSelectedPlayer = gcType.GetField("SelectedPlayer", flags);
+                            _fldGcIsAI           = gcType.GetField("isAI",           flags);
 
                             if (_fldGcSelectedPlayer != null)
                             {
@@ -903,6 +942,7 @@ namespace FootballAccessMod.Accessibility
                                     _fldAllowPlayerControl     = fplType.GetField("allowPlayerControl",    flags);
                                     _fldAssignmentTargets      = fplType.GetField("AssignmentTargets",     flags);
                                     _fldAssignmentPathComplete = fplType.GetField("AssignmentPathComplete", flags);
+                                    _fldThrownBallReactCounter = fplType.GetField("thrownBallReactCounter", flags);
 
                                     if (_fldPlayerData != null)
                                     {

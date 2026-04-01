@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.EventSystems;
 using FootballAccessMod.Speech;
 
 namespace FootballAccessMod.Accessibility
@@ -35,10 +34,6 @@ namespace FootballAccessMod.Accessibility
 
         // Heartbeat — logs button state once per second while menu is open
         private static float _heartbeatTimer = 0f;
-
-        // EventSystem suppression — saves the game's selected UI object so we
-        // can restore it exactly when the mod menu closes.
-        private static GameObject _savedSelectedObject = null;
 
         // ---- Setting definitions ----
         // Order shown in the menu — grouped by category.
@@ -230,47 +225,43 @@ namespace FootballAccessMod.Accessibility
             }
 
             // ---- Menu navigation (only when open) ----
+            // KEYBOARD ONLY — deliberately no D-pad / joystick button reads here.
+            // The game's menu cursor is moved by controller D-pad; if we also read
+            // controller input for the mod menu the two systems fight each other and
+            // the game cursor drifts.  Since the menu is opened with F2 (a keyboard
+            // key), navigating with keyboard arrow keys is natural and causes zero
+            // interference with the game's controller-based navigation.
 
-            // B button or Escape → close
-            bool bBtn = Input.GetKey(KeyCode.JoystickButton1);
-            bool esc  = Input.GetKey(KeyCode.Escape);
-            if ((bBtn && !_bWasDown) || (esc && !_escWasDown))
+            // Escape → close
+            bool esc = Input.GetKey(KeyCode.Escape);
+            if (esc && !_escWasDown)
             {
                 Close();
-                _bWasDown  = bBtn;
                 _escWasDown = esc;
                 return;
             }
-            _bWasDown  = bBtn;
             _escWasDown = esc;
 
-            // D-pad / arrow keys — button codes + axis fallback
-            // JoystickButton10-13 covers most Unity/DirectInput mappings.
-            // Joy1Axis6/7 covers XInput D-pad-as-axis (many Xbox controllers on Windows).
-            float dpH = 0f, dpV = 0f;
-            try { dpH = Input.GetAxisRaw("Joy1Axis6"); } catch { }
-            try { dpV = Input.GetAxisRaw("Joy1Axis7"); } catch { }
+            // Arrow keys
+            bool up    = Input.GetKey(KeyCode.UpArrow);
+            bool down  = Input.GetKey(KeyCode.DownArrow);
+            bool left  = Input.GetKey(KeyCode.LeftArrow);
+            bool right = Input.GetKey(KeyCode.RightArrow);
 
-            bool up    = Input.GetKey(KeyCode.JoystickButton10) || Input.GetKey(KeyCode.UpArrow)    || dpV >  0.5f;
-            bool down  = Input.GetKey(KeyCode.JoystickButton11) || Input.GetKey(KeyCode.DownArrow)  || dpV < -0.5f;
-            bool left  = Input.GetKey(KeyCode.JoystickButton12) || Input.GetKey(KeyCode.LeftArrow)  || dpH < -0.5f;
-            bool right = Input.GetKey(KeyCode.JoystickButton13) || Input.GetKey(KeyCode.RightArrow) || dpH >  0.5f;
-
-            // Heartbeat: write button state to log once per second so we can confirm
-            // that PollInput is reaching this block and what input is being read.
+            // Heartbeat: write key state to log once per second
             _heartbeatTimer += Time.unscaledDeltaTime;
             if (_heartbeatTimer >= 1f)
             {
                 _heartbeatTimer = 0f;
-                Plugin.Log.LogInfo($"[SettingsMenu] HB focus={_focus} up={up} dn={down} lt={left} rt={right} dpH={dpH:F2} dpV={dpV:F2} B={bBtn}");
+                Plugin.Log.LogInfo($"[SettingsMenu] HB focus={_focus} up={up} dn={down} lt={left} rt={right}");
                 try { System.IO.File.AppendAllText(@"C:\football\speech_log.txt",
-                    $"[{System.DateTime.Now:HH:mm:ss.fff}] SETTINGS_HB focus={_focus} up={up} dn={down} lt={left} rt={right} dpH={dpH:F2} dpV={dpV:F2}\n"); } catch { }
+                    $"[{System.DateTime.Now:HH:mm:ss.fff}] SETTINGS_HB focus={_focus} up={up} dn={down} lt={left} rt={right}\n"); } catch { }
             }
 
-            if (up    && !_upWasDown)    { Plugin.Log.LogInfo("[SettingsMenu] D-pad UP");    MoveFocus(-1); }
-            if (down  && !_downWasDown)  { Plugin.Log.LogInfo("[SettingsMenu] D-pad DOWN");  MoveFocus(+1); }
-            if (left  && !_leftWasDown)  { Plugin.Log.LogInfo("[SettingsMenu] D-pad LEFT");  ChangeValue(-1); }
-            if (right && !_rightWasDown) { Plugin.Log.LogInfo("[SettingsMenu] D-pad RIGHT"); ChangeValue(+1); }
+            if (up    && !_upWasDown)    { Plugin.Log.LogInfo("[SettingsMenu] Key UP");    MoveFocus(-1); }
+            if (down  && !_downWasDown)  { Plugin.Log.LogInfo("[SettingsMenu] Key DOWN");  MoveFocus(+1); }
+            if (left  && !_leftWasDown)  { Plugin.Log.LogInfo("[SettingsMenu] Key LEFT");  ChangeValue(-1); }
+            if (right && !_rightWasDown) { Plugin.Log.LogInfo("[SettingsMenu] Key RIGHT"); ChangeValue(+1); }
 
             _upWasDown    = up;
             _downWasDown  = down;
@@ -290,20 +281,13 @@ namespace FootballAccessMod.Accessibility
             _focus = 0;
             _heartbeatTimer = 0f;
 
-            // Freeze the game's menu cursor so D-pad can't move it while we're open.
-            var es = EventSystem.current;
-            if (es != null)
-            {
-                _savedSelectedObject = es.currentSelectedGameObject;
-                es.enabled = false;
-            }
             var s = Settings[_focus];
             Plugin.Log.LogInfo($"[SettingsMenu] Open() called. Settings.Length={Settings.Length} firstName={s.Name}");
             try { System.IO.File.AppendAllText(@"C:\football\speech_log.txt",
                 $"[{System.DateTime.Now:HH:mm:ss.fff}] SETTINGS_OPEN firstName={s.Name}\n"); } catch { }
             string msg =
                 $"Mod settings. {Settings.Length} options. " +
-                $"Use D-pad up and down to navigate, left and right to change. B to close. " +
+                $"Use up and down arrow keys to navigate, left and right arrow keys to change. Escape to close. " +
                 $"Setting 1 of {Settings.Length}: {s.Name}, {s.Format(s.Get())}.";
             SpeechManager.Speak(msg);
             SpeechManager.SpeakQueued(s.Description);
@@ -315,17 +299,6 @@ namespace FootballAccessMod.Accessibility
             _backWasDown    = false;
             _backHeld       = 0f;
             _heartbeatTimer = 0f;
-
-            // Restore the game's EventSystem and cursor position.
-            var es = EventSystem.current;
-            if (es != null)
-            {
-                es.enabled = true;
-                if (_savedSelectedObject != null)
-                    es.SetSelectedGameObject(_savedSelectedObject);
-                _savedSelectedObject = null;
-            }
-
             SpeechManager.Speak("Mod settings closed.");
         }
 

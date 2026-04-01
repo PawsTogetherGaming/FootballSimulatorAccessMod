@@ -66,20 +66,24 @@ namespace FootballAccessMod.Accessibility
                         continue;
 
                     // GamePad.SetVibration(PlayerIndex playerIndex, float leftMotor, float rightMotor)
-                    var gamePadType = asm.GetType("XInputDotNet.GamePad")
+                    var gamePadType = asm.GetType("XInputDotNetPure.GamePad")
+                                   ?? asm.GetType("XInputDotNet.GamePad")
                                    ?? asm.GetType("GamePad");
                     if (gamePadType == null) continue;
+
+                    var playerIndexType = asm.GetType("XInputDotNetPure.PlayerIndex")
+                                        ?? asm.GetType("XInputDotNet.PlayerIndex")
+                                        ?? asm.GetType("PlayerIndex");
+                    if (playerIndexType == null) continue;
 
                     _methSetVib = gamePadType.GetMethod("SetVibration",
                         BindingFlags.Static | BindingFlags.Public,
                         null,
-                        new[] { asm.GetType("XInputDotNet.PlayerIndex") ?? asm.GetType("PlayerIndex"),
-                                typeof(float), typeof(float) },
+                        new[] { playerIndexType, typeof(float), typeof(float) },
                         null);
 
                     if (_methSetVib == null) continue;
 
-                    var playerIndexType = _methSetVib.GetParameters()[0].ParameterType;
                     _playerIndexOne = Enum.Parse(playerIndexType, "One");
 
                     _available = true;

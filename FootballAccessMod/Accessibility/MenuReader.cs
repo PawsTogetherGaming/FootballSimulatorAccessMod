@@ -28,7 +28,12 @@ namespace FootballAccessMod.Accessibility
         private static bool   _reflectionDone = false;
         private static string _lastPolled = "";
 
-        private struct PatchEntry { public string target; public string postfixName; }
+        private struct PatchEntry
+        {
+            public string target;
+            public string postfixName;
+            public string prefixName;   // optional — null means no prefix
+        }
 
         public static void ApplyPatches(Harmony harmony)
         {
@@ -60,6 +65,7 @@ namespace FootballAccessMod.Accessibility
             {
                 string target = entry.target;
                 HarmonyMethod postfix = Post(entry.postfixName);
+                HarmonyMethod prefix  = null; // no prefix suppression — mod menu is keyboard-only
                 try
                 {
                     MethodBase method = AccessTools.Method(target);
@@ -69,7 +75,7 @@ namespace FootballAccessMod.Accessibility
                         skipped++;
                         continue;
                     }
-                    harmony.Patch(method, postfix: postfix);
+                    harmony.Patch(method, prefix: prefix, postfix: postfix);
                     Plugin.Log.LogInfo("[MenuReader] Patched: " + target);
                     ok++;
                 }

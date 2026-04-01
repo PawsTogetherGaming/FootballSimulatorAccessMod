@@ -28,6 +28,7 @@ namespace FootballAccessMod.Accessibility
 
         // --- Play-call screen state ---
         private static bool   _playCallOpen  = false;
+        private static bool   _isKickoff     = false;   // true while OffenseBox title contains "Kick"
         private static string _lastFormation = "";
 
         // --- Cached TMP refs (populated once on entry) ---
@@ -81,6 +82,10 @@ namespace FootballAccessMod.Accessibility
         private static bool        _aWasDown            = false;
         private static bool        _yWasDown            = false;
 
+        // PollInput stores the column pressed this frame; CheckOneSide uses it at depth 1→0.
+        // -1 = no pending press.
+        private static int         _confirmedPlayCol    = -1;
+
         // One-time diagnostic: log play item type so we know if ToString() gives real names
         private static bool        _playItemLogged      = false;
 
@@ -121,43 +126,59 @@ namespace FootballAccessMod.Accessibility
         {
             if (!_wasInGame) return;
             if (!_playCallOpen && !_defPlayCallOpen) return;
-            if (!_playbookRefsDone || _playbookInst == null) return;
 
-            // Determine which side is open and what depth we're at
-            bool isDefense = _defPlayCallOpen && !_playCallOpen;
-            int depth = 0;
-            int page  = 0;
-            try
-            {
-                var fldD = isDefense ? _fldDefDepth : _fldDepth;
-                var fldP = isDefense ? _fldDefPage  : _fldPage;
-                depth = (int)(fldD?.GetValue(_playbookInst) ?? 0);
-                page  = (int)(fldP?.GetValue(_playbookInst) ?? 0);
-            }
-            catch { return; }
+            // ---- Why we announce here instead of in Poll/CheckOneSide ----
+            // Our PlayerLoop runs AFTER the game's MonoBehaviour.Update each frame.
+            // When X/A/Y is pressed at depth 1:
+            //   1. Game Update fires → transitions depth 1→0, often closes screen entirely.
+            //   2. PollInput fires (same frame) → depth is already 0, screen may be gone.
+            //   3. Poll fires (up to 120ms later) → CheckOneSide sees !open early-returns,
+            //      resets everything, and the _confirmedPlayCol stored last time is lost.
+            //
+            // PollInput runs between Poll cycles.  At this moment _lastPlayPage /
+            // _lastDefPlayPage are STILL VALID — Poll hasn't run yet to reset them.
+            // So we can look up and announce the play name right here, right now.
+            //
+            // _lastOffDepth / _lastDefDepth (set by the previous Poll cycle) tell us
+            // whether we were at play-selection depth — if so, any X/A/Y this frame
+            // is definitively a play confirmation.
 
-            if (depth != 1) return;   // only at play-selection depth
+            bool isDefense      = _defPlayCallOpen && !_playCallOpen;
+            bool wasAtPlayDepth = isDefense ? (_lastDefDepth == 1) : (_lastOffDepth == 1);
+            if (!wasAtPlayDepth) return;
 
-            // X = col 0, A = col 1, Y = col 2
+            // X/Square = col 0,  A/Cross = col 1,  B/Circle = col 2
             int col = -1;
-            if (Input.GetKeyDown(KeyCode.JoystickButton2)) col = 0; // X
-            else if (Input.GetKeyDown(KeyCode.JoystickButton0)) col = 1; // A
-            else if (Input.GetKeyDown(KeyCode.JoystickButton3)) col = 2; // Y
+            if      (Input.GetKeyDown(KeyCode.JoystickButton2)) col = 0;  // X / Square
+            else if (Input.GetKeyDown(KeyCode.JoystickButton0)) col = 1;  // A / Cross
+            else if (Input.GetKeyDown(KeyCode.JoystickButton1)) col = 2;  // B / Circle
             if (col < 0) return;
 
             if (!(ModSettings.ReadSelectedPlay?.Value ?? true)) return;
 
-            var fldList = isDefense ? _fldDefPlayList : _fldPlayList;
-            string playName = GetPlayAt(fldList, page, col);
-            if (string.IsNullOrWhiteSpace(playName)) return;
+            // Look up play name using the cached page — still valid this frame.
+            int      page    = isDefense ? _lastDefPlayPage : _lastPlayPage;
+            FieldInfo fldList = isDefense ? _fldDefPlayList  : _fldPlayList;
+            string   side    = isDefense ? "defense" : "offense";
 
-            string side = isDefense ? "defense" : "offense";
-            SpeechManager.Speak(BuildPlayAnnouncement(playName, side));
-            Plugin.Log.LogInfo($"[GameplayReader] PollInput: play selected '{playName}' col={col} side={side}");
+            if (page >= 0 && fldList != null)
+            {
+                string playName = GetPlayAt(fldList, page, col);
+                if (!string.IsNullOrWhiteSpace(playName))
+                {
+                    SpeechManager.Speak(BuildPlayAnnouncement(playName, side));
+                    // Suppress CheckOneSide / CheckCurrentPlay from re-announcing
+                    if (isDefense) _lastCalledDefPlay = playName;
+                    else           _lastCalledPlay    = playName;
+                    _confirmedPlayCol = col;   // also store as belt-and-suspenders fallback
+                    Plugin.Log.LogInfo($"[GameplayReader] PollInput: announced '{playName}' col={col} page={page} side={side}");
+                    return;
+                }
+            }
 
-            // Suppress the 120ms Poll() from re-announcing the same play
-            if (isDefense) _lastCalledDefPlay = playName;
-            else           _lastCalledPlay    = playName;
+            // Page lookup failed — store col so CheckOneSide can try its own fallbacks.
+            _confirmedPlayCol = col;
+            Plugin.Log.LogInfo($"[GameplayReader] PollInput: col={col} stored as fallback (page={page} fldList={fldList != null}) side={side}");
         }
 
         // =========================================================
@@ -211,9 +232,12 @@ namespace FootballAccessMod.Accessibility
             CheckQuarter();
             CheckScore();
             CheckPlayCall();
-            // Announce play names only while the play call screen is open (navigation/confirmation).
-            // Suppress after the screen closes so we don't announce plays mid-execution.
-            if (_playCallOpen || _defPlayCallOpen)
+            // Only check oc/dc.CurrentPlay when no play-call screen is open.
+            // While a screen is open, _lastCalledPlay/_lastCalledDefPlay are cleared
+            // for dedup purposes, so reading CurrentPlay would re-announce stale values
+            // (e.g. "Punt", "Man Base") from the previous play.  The depth 1→0
+            // transition in CheckOneSide handles announcing the confirmed play.
+            if (!_playCallOpen && !_defPlayCallOpen)
                 CheckCurrentPlay();
             CheckAudibles();
 
@@ -262,6 +286,7 @@ namespace FootballAccessMod.Accessibility
         {
             _wasInGame        = false;
             _playCallOpen     = false;
+            _isKickoff        = false;
             _defPlayCallOpen  = false;
             _lastFormation    = "";
             _lastDefFormation = "";
@@ -278,6 +303,7 @@ namespace FootballAccessMod.Accessibility
             _xWasDown         = false;
             _aWasDown         = false;
             _yWasDown         = false;
+            _confirmedPlayCol = -1;
             _playItemLogged   = false;
             _ocInst           = null;
             _dcInst           = null;
@@ -426,10 +452,16 @@ namespace FootballAccessMod.Accessibility
                 lastDepth:     ref _lastOffDepth,
                 sideLabel:     "offense");
 
-            // If offense just opened this poll (kickoff scenario), skip defense
-            // to avoid double-announcing. Defense will catch up next poll.
-            bool offJustOpened = !offWasOpen && _playCallOpen;
-            if (offJustOpened) return;
+            // During kickoffs the game shows both OffenseBox ("Kick Off") and
+            // DefenseBox ("Defense Play") simultaneously.  The defense box just
+            // displays the opposing team's auto-selected return formation (e.g.
+            // "Man Base") which is not actionable — suppress it entirely while
+            // the offense title contains "Kick".
+            // Track whether we're in a kickoff scenario (either box title contains "Kick").
+            _isKickoff = (!string.IsNullOrEmpty(offTitle)
+                          && offTitle.IndexOf("Kick", StringComparison.OrdinalIgnoreCase) >= 0)
+                      || (!string.IsNullOrEmpty(defTitle)
+                          && defTitle.IndexOf("Kick", StringComparison.OrdinalIgnoreCase) >= 0);
 
             CheckOneSide(
                 title:         defTitle,
@@ -458,11 +490,12 @@ namespace FootballAccessMod.Accessibility
             ref int lastDepth,
             string sideLabel)
         {
-            // Match any "Play" title that isn't the formation title.
-            // No longer requiring sideLabel so kickoff/special-teams titles also match.
+            // Match any title containing "Play" or "Kick" that isn't the formation title.
+            // "Kick" catches kickoff play-call screens whose title says "Kick Off" etc.
             bool open = !string.IsNullOrWhiteSpace(title)
                      && !string.Equals(title, formKeyword, StringComparison.OrdinalIgnoreCase)
-                     && title.IndexOf("Play", StringComparison.OrdinalIgnoreCase) >= 0;
+                     && (title.IndexOf("Play", StringComparison.OrdinalIgnoreCase) >= 0
+                      || title.IndexOf("Kick", StringComparison.OrdinalIgnoreCase) >= 0);
 
             if (open)
                 Plugin.Log.LogInfo($"[GameplayReader] {sideLabel} play screen open. Title=\"{title}\"");
@@ -491,6 +524,9 @@ namespace FootballAccessMod.Accessibility
             {
                 isOpen    = true;
                 lastDepth = depth;
+                // Reset called-play dedup so the same play called twice is still announced.
+                if (sideLabel == "offense") _lastCalledPlay    = "";
+                else                         _lastCalledDefPlay = "";
                 // Seed button states immediately so any held button from menu nav doesn't misfire
                 SeedButtonStates();
                 string formation = Clean(formationTmp);
@@ -541,12 +577,31 @@ namespace FootballAccessMod.Accessibility
                     // Depth 1→0 is the play confirmation moment. Try to announce the play name.
                     string announced = "";
 
-                    // Try 1: button detection — button may still be held on this poll
-                    int confirmCol = ConsumePlayButtonPress();
-                    if (confirmCol >= 0 && savedPlayPage >= 0)
+                    // Try 0: column recorded by PollInput this frame (runs every Unity frame,
+                    // so it catches the press even though depth already flipped to 0).
+                    int confirmedCol = _confirmedPlayCol;
+                    _confirmedPlayCol = -1;   // always consume, even if savedPlayPage < 0
+                    if (confirmedCol >= 0 && savedPlayPage >= 0)
                     {
-                        string pn = GetPlayAt(fldPlayList, savedPlayPage, confirmCol);
+                        string pn = GetPlayAt(fldPlayList, savedPlayPage, confirmedCol);
                         if (!string.IsNullOrWhiteSpace(pn)) announced = pn;
+                    }
+
+                    // Try 1: button detection — button may still be held on this poll
+                    int confirmCol = -1;
+                    if (string.IsNullOrWhiteSpace(announced))
+                    {
+                        confirmCol = ConsumePlayButtonPress();
+                        if (confirmCol >= 0 && savedPlayPage >= 0)
+                        {
+                            string pn = GetPlayAt(fldPlayList, savedPlayPage, confirmCol);
+                            if (!string.IsNullOrWhiteSpace(pn)) announced = pn;
+                        }
+                    }
+                    else
+                    {
+                        ConsumePlayButtonPress(); // drain state so _xWasDown etc. stay current
+                        confirmCol = confirmedCol; // use recorded col for the log
                     }
 
                     // Try 2: last highlighted play from column detection
@@ -633,6 +688,24 @@ namespace FootballAccessMod.Accessibility
 
         // ---- Confirmed play detection ----
 
+        // Play-type and formation names that the game writes into CurrentPlay
+        // but are NOT actual user-selected plays.  Filter these out.
+        private static readonly string[] _nonPlayNames = new[]
+        {
+            "Punt", "FieldGoal", "Kickoff", "KickOff",
+            "Man Base", "Zone Base", "Prevent",           // common auto-pick formations
+            "None", "Default", ""
+        };
+
+        private static bool IsRealPlayName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            foreach (var bad in _nonPlayNames)
+                if (string.Equals(name, bad, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            return true;
+        }
+
         private static void CheckCurrentPlay()
         {
             bool readSelectedPlay = ModSettings.ReadSelectedPlay?.Value ?? true;
@@ -641,16 +714,18 @@ namespace FootballAccessMod.Accessibility
             if (_fldOcCurrentPlay != null && _ocInst != null)
             {
                 string name = CleanPlayName(_fldOcCurrentPlay.GetValue(_ocInst)?.ToString() ?? "");
-                if (!string.IsNullOrWhiteSpace(name) && name != _lastCalledPlay)
+                if (IsRealPlayName(name) && name != _lastCalledPlay)
                 {
                     _lastCalledPlay = name;
                     SpeechManager.Speak(BuildPlayAnnouncement(name, "offense"));
                 }
             }
-            if (_fldDcCurrentPlay != null && _dcInst != null)
+            // Suppress defense play announcement during kickoffs — the DC's
+            // CurrentPlay is the auto-selected return formation, not a user pick.
+            if (_fldDcCurrentPlay != null && _dcInst != null && !_isKickoff)
             {
                 string name = CleanPlayName(_fldDcCurrentPlay.GetValue(_dcInst)?.ToString() ?? "");
-                if (!string.IsNullOrWhiteSpace(name) && name != _lastCalledDefPlay)
+                if (IsRealPlayName(name) && name != _lastCalledDefPlay)
                 {
                     _lastCalledDefPlay = name;
                     SpeechManager.Speak(BuildPlayAnnouncement(name, "defense"));
@@ -1093,18 +1168,18 @@ namespace FootballAccessMod.Accessibility
         // X → col 0 (1st play), A → col 1 (2nd play), Y → col 2 (3rd play)
         private static int ConsumePlayButtonPress()
         {
-            bool xNow = Input.GetKey(KeyCode.JoystickButton2);
-            bool aNow = Input.GetKey(KeyCode.JoystickButton0);
-            bool yNow = Input.GetKey(KeyCode.JoystickButton3);
+            bool xNow = Input.GetKey(KeyCode.JoystickButton2);  // X / Square
+            bool aNow = Input.GetKey(KeyCode.JoystickButton0);  // A / Cross
+            bool bNow = Input.GetKey(KeyCode.JoystickButton1);  // B / Circle
 
             int result = -1;
             if      (xNow && !_xWasDown) result = 0;
             else if (aNow && !_aWasDown) result = 1;
-            else if (yNow && !_yWasDown) result = 2;
+            else if (bNow && !_yWasDown) result = 2;
 
             _xWasDown = xNow;
             _aWasDown = aNow;
-            _yWasDown = yNow;
+            _yWasDown = bNow;
             return result;
         }
 

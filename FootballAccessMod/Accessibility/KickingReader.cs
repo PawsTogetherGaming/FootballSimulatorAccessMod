@@ -37,6 +37,11 @@ namespace FootballAccessMod.Accessibility
         private static FieldInfo    _fldPlayOutcome          = null;
         private static FieldInfo    _fldIsHomeDefense        = null;
 
+        // Human-side guard: oc.gc.isAI — true means CPU is on offense (kicking)
+        private static FieldInfo    _fldOc                   = null;
+        private static FieldInfo    _fldOcGc                 = null;
+        private static FieldInfo    _fldGcIsAI               = null;
+
         // Cached ball as a Component so we can read its transform.position directly
         private static Component    _ballComponent           = null;
 
@@ -100,11 +105,31 @@ namespace FootballAccessMod.Accessibility
 
             bool isKickPlay = playType == "FieldGoal" || playType == "Punt" || playType == "Kickoff";
 
+            // Guard: only run kicking guidance when the human is on offense (kicking).
+            // oc.gc.isAI == true means CPU controls offense this possession — the human
+            // is receiving/defending and shouldn't hear aim/power callouts.
+            bool cpuIsKicking = false;
+            if (isKickPlay && _fldOc != null && _fldOcGc != null && _fldGcIsAI != null)
+            {
+                try
+                {
+                    object oc = _fldOc.GetValue(_matchInst);
+                    if (oc != null)
+                    {
+                        object gc = _fldOcGc.GetValue(oc);
+                        if (gc != null)
+                            cpuIsKicking = (bool)(_fldGcIsAI.GetValue(gc) ?? false);
+                    }
+                }
+                catch { }
+            }
+
             // Always watch for post-kick outcome during or just after a kick play
-            if (isKickPlay || _lastPhase != KickPhase.None)
+            // (but only when the human kicked — not when CPU kicked)
+            if (!cpuIsKicking && (isKickPlay || _lastPhase != KickPhase.None))
                 PollOutcome();
 
-            if (!isKickPlay || playState == "InHuddle")
+            if (!isKickPlay || cpuIsKicking || playState == "InHuddle")
             {
                 if (_lastPhase != KickPhase.None) _lastPhase = KickPhase.None;
                 return;
@@ -267,8 +292,11 @@ namespace FootballAccessMod.Accessibility
             }
             catch { return; }
 
-            // Detect bar reversing direction — reset bucket so next ascent is announced fresh
-            if (value < _prevSliderValue - 0.02f)
+            // Detect bar clearly reversing direction — reset bucket so next
+            // ascent is announced fresh.  Use a wider threshold (0.08 ≈ 8%) to
+            // avoid false resets from float jitter near the top of the bar, and
+            // never reset once MAX has been announced (bucket == 100).
+            if (_lastPowerBucket < 100 && value < _prevSliderValue - 0.08f)
                 _lastPowerBucket = -1;
             _prevSliderValue = value;
 
@@ -412,6 +440,16 @@ namespace FootballAccessMod.Accessibility
                     _fldQB            = mt.GetField("qb",            flags);
                     _fldPlayOutcome   = mt.GetField("playOutcome",   flags);
                     _fldIsHomeDefense = mt.GetField("isHomeDefense", flags);
+
+                    // oc → gc → isAI for human-side guard
+                    _fldOc = mt.GetField("oc", flags);
+                    if (_fldOc != null)
+                    {
+                        var ocType = _fldOc.FieldType;
+                        _fldOcGc = ocType.GetField("gc", flags);
+                        if (_fldOcGc != null)
+                            _fldGcIsAI = _fldOcGc.FieldType.GetField("isAI", flags);
+                    }
 
                     object ballInst = null;
                     try { ballInst = _fldBall?.GetValue(_matchInst); } catch { }

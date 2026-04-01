@@ -866,6 +866,6 @@ namespace FootballAccessMod
     {
         public const string PLUGIN_GUID    = "com.footballaccess.mod";
         public const string PLUGIN_NAME    = "Football Accessibility Mod";
-        public const string PLUGIN_VERSION = "1.0.0";
+        public const string PLUGIN_VERSION = "2.0.0";
     }
 }
