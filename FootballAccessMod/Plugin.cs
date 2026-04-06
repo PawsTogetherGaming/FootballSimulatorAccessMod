@@ -317,6 +317,14 @@ namespace FootballAccessMod
                     DumpHierarchyDeep(settingsScreen.transform, sb, 0, 8);
                 }
 
+                // Deep hierarchy of Roster_Screen — reveals team name and player list structure
+                var rosterScreen = GameObject.Find("Roster_Screen");
+                if (rosterScreen != null && rosterScreen.activeInHierarchy)
+                {
+                    sb.AppendLine("\n--- Roster_Screen Deep Hierarchy (all, incl. inactive) ---");
+                    DumpHierarchyDeep(rosterScreen.transform, sb, 0, 10);
+                }
+
                 // Reflection dump of FootballGameplayMenu — find play list fields
                 DumpGameplayMenuFields(sb);
 

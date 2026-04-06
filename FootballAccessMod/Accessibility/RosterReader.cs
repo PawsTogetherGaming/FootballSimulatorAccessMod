@@ -21,6 +21,10 @@ namespace FootballAccessMod.Accessibility
         private static TextMeshProUGUI _position;   // from Content Scroll View player (no suffix)
         private static TextMeshProUGUI _jerseyId;   // ID field on the Name row
 
+        // Team name tracking — announced when L2/R2 switches teams
+        private static TextMeshProUGUI _teamNameTMP;
+        private static string _lastTeamName = "";
+
         // PlayerOptions popup tracking
         public static bool PopupIsActive { get; private set; }
         private static string _lastPopupButton = "";
@@ -39,6 +43,8 @@ namespace FootballAccessMod.Accessibility
                 PopupIsActive = false;
                 _lastAnnounced = "";
                 _lastPopupButton = "";
+                _lastTeamName = "";
+                _teamNameTMP = null;
                 return;
             }
 
@@ -46,12 +52,21 @@ namespace FootballAccessMod.Accessibility
             {
                 _wasActive = true;
                 CacheRefs(screen);
-                SpeechManager.Speak("Roster. Use up and down to browse players.");
+                string teamOnEntry = ReadTeamName();
+                _lastTeamName = teamOnEntry;
+                string entryMsg = "Roster.";
+                if (!string.IsNullOrWhiteSpace(teamOnEntry))
+                    entryMsg += $" {teamOnEntry}.";
+                entryMsg += " Use up and down to browse players. Left and right trigger to switch teams.";
+                SpeechManager.Speak(entryMsg);
                 return;
             }
 
             // Check PlayerOptions popup first (takes focus priority)
             if (CheckPopup(screen)) return;
+
+            // Check if the team changed (L2/R2 switches teams)
+            CheckTeamChange();
 
             // Check if selected player changed
             CheckPlayerChange();
@@ -170,6 +185,42 @@ namespace FootballAccessMod.Accessibility
             return System.Text.RegularExpressions.Regex.IsMatch(s.Trim(), @"^\d+$");
         }
 
+        private static string ReadTeamName()
+        {
+            // Re-read from cached TMP first
+            if (_teamNameTMP != null)
+            {
+                try
+                {
+                    string val = Clean(_teamNameTMP);
+                    if (!string.IsNullOrWhiteSpace(val)) return val;
+                }
+                catch { _teamNameTMP = null; }
+            }
+            return "";
+        }
+
+        private static void CheckTeamChange()
+        {
+            // Re-find the TMP each poll in case the game rebuilt the UI
+            var screen = GameObject.Find("Roster_Screen");
+            if (screen != null)
+            {
+                var t = screen.transform.Find("Team Color Panel/Team Name Text");
+                if (t != null)
+                {
+                    var tmp = t.GetComponent<TextMeshProUGUI>();
+                    if (tmp != null) _teamNameTMP = tmp;
+                }
+            }
+
+            string team = ReadTeamName();
+            if (string.IsNullOrWhiteSpace(team) || team == _lastTeamName) return;
+            _lastTeamName = team;
+            _lastAnnounced = ""; // reset so the first player on the new team is announced
+            SpeechManager.Speak(team);
+        }
+
         private static void CheckPlayerChange()
         {
             if (_firstName == null) return;
@@ -216,6 +267,37 @@ namespace FootballAccessMod.Accessibility
                 var playerRow = viewport.Find("player");
                 if (playerRow != null)
                     _position = FindTMP(playerRow.gameObject, "POS");
+            }
+
+            // Team name — try known paths first, then scan by GO name
+            _teamNameTMP = null;
+            string[] teamPaths = {
+                "Team Color Panel/Team Name Text",
+                "Team Name", "TeamName", "TEAM", "Team",
+                "Team Name Text", "TeamName Text"
+            };
+            foreach (string path in teamPaths)
+            {
+                Transform t = screen.transform.Find(path);
+                if (t != null)
+                {
+                    var tmp = t.GetComponent<TextMeshProUGUI>();
+                    if (tmp != null) { _teamNameTMP = tmp; break; }
+                }
+            }
+
+            // Fallback: scan all TMPs for one whose GO name contains "team" (case-insensitive)
+            if (_teamNameTMP == null)
+            {
+                foreach (var tmp in screen.GetComponentsInChildren<TextMeshProUGUI>(true))
+                {
+                    string goName = tmp.gameObject.name.ToLower();
+                    if (goName.Contains("team") && !goName.Contains("teammate"))
+                    {
+                        _teamNameTMP = tmp;
+                        break;
+                    }
+                }
             }
 
             // Seed last values so we don't double-announce on entry
