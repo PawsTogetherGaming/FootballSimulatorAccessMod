@@ -57,6 +57,10 @@
       <HintPath>$(GamePath)Football Simulator_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(GamePath)Football Simulator_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.AudioModule">
       <HintPath>$(GamePath)Football Simulator_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>

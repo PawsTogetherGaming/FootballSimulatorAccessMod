@@ -199,14 +199,15 @@ namespace FootballAccessMod
             KickingReader.Poll();
 
             // UIButton / UIButtonLinker / UIButtonStretch fallback
-            // Suppress UIButton/Linker when roster popup is open — the player row button
-            // stays "selected" behind the popup and causes alternating speech with popup buttons.
-            if (_loopUiButtonType != null && !RosterReader.PopupIsActive)
+            // Suppress when roster screen is active (RosterReader handles its own speech).
+            // When the character editor is open, let the button scanner run so editor
+            // buttons (keyboard keys, confirm, cancel) are announced normally.
+            bool suppressButtons = RosterReader.PopupIsActive || RosterReader.RosterIsActive;
+            if (_loopUiButtonType != null && !suppressButtons)
                 PollButtonsLoop(_loopUiButtonType);
-            if (_loopUiButtonLinkerType != null && !RosterReader.PopupIsActive)
+            if (_loopUiButtonLinkerType != null && !suppressButtons)
                 PollButtonsLoop(_loopUiButtonLinkerType);
-            // UIButtonStretch always runs — used by the popup buttons themselves
-            if (_loopUiButtonStretchType != null)
+            if (_loopUiButtonStretchType != null && !suppressButtons)
                 PollButtonsLoop(_loopUiButtonStretchType);
         }
 
@@ -323,6 +324,14 @@ namespace FootballAccessMod
                 {
                     sb.AppendLine("\n--- Roster_Screen Deep Hierarchy (all, incl. inactive) ---");
                     DumpHierarchyDeep(rosterScreen.transform, sb, 0, 10);
+                }
+
+                // Deep hierarchy of CharacterEditor_Screen — reveals ratings stat row components
+                var charEditor = GameObject.Find("CharacterEditor_Screen");
+                if (charEditor != null && charEditor.activeInHierarchy)
+                {
+                    sb.AppendLine("\n--- CharacterEditor_Screen Deep Hierarchy (all, incl. inactive) ---");
+                    DumpHierarchyDeep(charEditor.transform, sb, 0, 8);
                 }
 
                 // Reflection dump of FootballGameplayMenu — find play list fields
@@ -662,6 +671,20 @@ namespace FootballAccessMod
                     var mb = raw as MonoBehaviour;
                     if (mb == null || !mb.gameObject.activeInHierarchy) continue;
                     if (!IsLoopButtonSelected(mb)) continue;
+
+                    // When the character card editor is open, buttons from other screens
+                    // (e.g. the still-selected roster player row) remain active in the background
+                    // and alternate with keyboard keys causing repeated announcements.
+                    // Restrict to buttons inside the CharacterEditor_Screen only.
+                    // Also skip the field buttons (FirstName Btn / LastName Btn) —
+                    // CheckEditorTyping handles those.
+                    if (RosterReader.EditorIsActive)
+                    {
+                        var editorRoot = RosterReader.EditorRoot;
+                        if (editorRoot == null || !mb.transform.IsChildOf(editorRoot)) continue;
+                        string bn = mb.gameObject.name;
+                        if (bn == "FirstName Btn" || bn == "LastName Btn") continue;
+                    }
 
                     string t = MenuReader.GetText(mb.gameObject);
                     // Substitute labels for known unlabeled/poorly-labelled buttons

@@ -30,6 +30,7 @@ namespace FootballAccessMod.Accessibility
 
         // FootballMatch fields
         private static FieldInfo _fldPlayState          = null;
+        private static FieldInfo _fldPlayType           = null;
         private static FieldInfo _fldDc                 = null;
         private static FieldInfo _fldDefensivePlayers   = null;
         private static FieldInfo _fldBall               = null;
@@ -420,6 +421,23 @@ namespace FootballAccessMod.Accessibility
                 if (!humanOnDefense)
                 {
                     if (_r1WasActive) { _r1WasActive = false; RestorePlayerControl(); }
+                    return;
+                }
+            }
+
+            // Guard: during kick/punt/FG plays the "defense" is actually the return team.
+            // Heat-seeking toward the ball or carrier would lock the returner in AI pursuit,
+            // preventing the player from running the ball back.
+            {
+                string pt = "";
+                try { pt = _fldPlayType?.GetValue(_matchInst)?.ToString() ?? ""; } catch { }
+                if (pt == "Kickoff" || pt == "Punt" || pt == "FieldGoal")
+                {
+                    if (_r1WasActive)
+                    {
+                        _r1WasActive = false;
+                        RestorePlayerControl();
+                    }
                     return;
                 }
             }
@@ -902,6 +920,7 @@ namespace FootballAccessMod.Accessibility
 
                     var matchType = _matchInst.GetType();
                     _fldPlayState        = matchType.GetField("playState",        flags);
+                    _fldPlayType         = matchType.GetField("playType",         flags);
                     _fldDc               = matchType.GetField("dc",               flags);
                     _fldDefensivePlayers = matchType.GetField("defensivePlayers",  flags);
                     _fldBall             = matchType.GetField("Ball",              flags);

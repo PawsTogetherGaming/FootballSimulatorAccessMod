@@ -31,6 +31,7 @@ namespace FootballAccessMod.Accessibility
         private static object    _matchInst               = null;
 
         private static FieldInfo _fldPlayState            = null;
+        private static FieldInfo _fldPlayType             = null;
         private static FieldInfo _fldPlayerWithBall       = null;
         private static FieldInfo _fldDefensivePlayers     = null;
         private static FieldInfo _fldIsHomeDefense        = null;
@@ -67,6 +68,10 @@ namespace FootballAccessMod.Accessibility
         private static FieldInfo _fldOc                   = null;   // FootballMatch.oc
         private static FieldInfo _fldOcGc                 = null;   // OffensiveCoordinator.gc
         private static FieldInfo _fldGcIsAI               = null;   // GameController.isAI
+
+        // Return-play guard: dc.gc.isAI — during kicks the receiving team is "defense"
+        private static FieldInfo _fldDc                   = null;   // FootballMatch.dc
+        private static FieldInfo _fldDcGc                 = null;   // DefensiveCoordinator.gc
 
         // Enum values
         private static object    _enumAIInControl         = null;
@@ -124,9 +129,10 @@ namespace FootballAccessMod.Accessibility
             if (!EnsureRefs()) return;
             _wasInGame = true;
 
-            // Guard: only apply offensive assist when the offense is human-controlled.
-            // oc.gc.isAI == true means the CPU is controlling the offense this possession.
-            // Fail closed: if we can't verify the human is on offense, don't run assists.
+            // Guard: only apply offensive assist when the human has the ball.
+            // Normal plays: oc.gc.isAI == false means the human controls the offense.
+            // Kick/punt returns: the receiving team is "defense" (dc) in the game's model,
+            // so we also check dc.gc.isAI for return play types (Kickoff, Punt, FieldGoal).
             {
                 bool humanOnOffense = false;
                 if (_fldOc != null && _fldOcGc != null && _fldGcIsAI != null)
@@ -143,6 +149,27 @@ namespace FootballAccessMod.Accessibility
                     }
                     catch { }
                 }
+
+                // During kick/punt returns the human is on the DC side with the ball.
+                if (!humanOnOffense && _fldDc != null && _fldDcGc != null && _fldPlayType != null)
+                {
+                    try
+                    {
+                        string pt = _fldPlayType.GetValue(_matchInst)?.ToString() ?? "";
+                        if (pt == "Kickoff" || pt == "Punt" || pt == "FieldGoal")
+                        {
+                            object dc = _fldDc.GetValue(_matchInst);
+                            if (dc != null)
+                            {
+                                object gc = _fldDcGc.GetValue(dc);
+                                if (gc != null)
+                                    humanOnOffense = !(bool)(_fldGcIsAI.GetValue(gc) ?? true);
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
                 if (!humanOnOffense)
                 {
                     if (_assistActive) ReleaseControl();
@@ -606,6 +633,7 @@ namespace FootballAccessMod.Accessibility
 
                     var matchType = _matchInst.GetType();
                     _fldPlayState        = matchType.GetField("playState",        flags);
+                    _fldPlayType         = matchType.GetField("playType",         flags);
                     _fldPlayerWithBall   = matchType.GetField("PlayerWithBall",   flags);
                     _fldDefensivePlayers = matchType.GetField("defensivePlayers",  flags);
                     _fldIsHomeDefense    = matchType.GetField("isHomeDefense",     flags);
@@ -618,6 +646,14 @@ namespace FootballAccessMod.Accessibility
                         _fldOcGc = ocType.GetField("gc", flags);
                         if (_fldOcGc != null)
                             _fldGcIsAI = _fldOcGc.FieldType.GetField("isAI", flags);
+                    }
+
+                    // Cache dc → gc for kick/punt return guard
+                    _fldDc = matchType.GetField("dc", flags);
+                    if (_fldDc != null)
+                    {
+                        var dcType = _fldDc.FieldType;
+                        _fldDcGc = dcType.GetField("gc", flags);
                     }
 
                     // FootballPlayer → logic → all needed fields
