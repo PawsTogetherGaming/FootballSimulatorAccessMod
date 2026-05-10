@@ -33,13 +33,19 @@ namespace FootballAccessMod
         public static ConfigEntry<bool> ReadEvasionPrompts;  // "Left! L1 stiff arm." etc.
         public static ConfigEntry<int>  OffensiveAssistPower; // 0=off … 10=full takeover
 
+        // ---- CPU Difficulty ----
+        // 0 = normal game balance, higher = easier CPU defense.
+        // Persists across exhibition, season, and any mid-season match.
+        public static ConfigEntry<int>  CPUDefenseDifficulty;
+
         public static void Init(ConfigFile config)
         {
-            const string HUD       = "In-Game HUD";
-            const string PLAYCALL  = "Play Call";
-            const string RECEIVERS = "Receivers";
-            const string DEFENSE   = "Defense";
-            const string OFFENSE   = "Offense";
+            const string HUD        = "In-Game HUD";
+            const string PLAYCALL   = "Play Call";
+            const string RECEIVERS  = "Receivers";
+            const string DEFENSE    = "Defense";
+            const string OFFENSE    = "Offense";
+            const string DIFFICULTY = "CPU Difficulty";
 
             // HUD auto-changes
             ReadDDChanges = config.Bind(HUD, "ReadDDChanges", true,
@@ -84,6 +90,19 @@ namespace FootballAccessMod
                 new ConfigDescription(
                     "Run assist power. 0=off, 1-3=occasional hints, 4-6=frequent hints, " +
                     "7-9=cut timing calls, 10=full AI takeover (steers carrier into open lane).",
+                    new AcceptableValueRange<int>(0, 10)));
+
+            // CPU Difficulty (both sides — defense AND offense)
+            CPUDefenseDifficulty = config.Bind(DIFFICULTY, "CPUDefenseDifficulty", 0,
+                new ConfigDescription(
+                    "How much weaker the CPU plays, on both defense and offense. " +
+                    "0=normal game balance. " +
+                    "On defense: reduces dive-tackle distance, narrows defender attack angle, slows " +
+                    "defender pursuit and grab tackles, drops most CPU interception attempts. " +
+                    "On offense: slows CPU players (so plays develop later), perturbs CPU QB throw " +
+                    "accuracy, and boosts your AI defenders' chance to pick off CPU passes. " +
+                    "10 makes the CPU largely passive. Applies in exhibition and season modes, " +
+                    "including mid-season matches.",
                     new AcceptableValueRange<int>(0, 10)));
         }
     }

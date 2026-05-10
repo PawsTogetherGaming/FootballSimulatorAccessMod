@@ -49,11 +49,15 @@ namespace FootballAccessMod
                 HarmonyInstance = _harmony;
                 MenuReader.ApplyPatches(_harmony);
                 PlaybookReader.ApplyPatches(_harmony);
+                // CPU difficulty system disabled until a more impactful approach is found.
+                // Code in Accessibility/DifficultyManager.cs is kept for future iteration.
+                // DifficultyPatches.ApplyPatches(_harmony);
 
                 // Attach runtime components (diagnostics / gameplay)
                 gameObject.AddComponent<GameDiscovery>();
                 gameObject.AddComponent<MenuPoller>();
                 gameObject.AddComponent<SceneScanner>();
+                // gameObject.AddComponent<DifficultyManager>();
 
                 Log.LogInfo("Patches applied. Football Simulator is now accessible!");
 
@@ -897,6 +901,6 @@ namespace FootballAccessMod
     {
         public const string PLUGIN_GUID    = "com.footballaccess.mod";
         public const string PLUGIN_NAME    = "Football Accessibility Mod";
-        public const string PLUGIN_VERSION = "2.0.0";
+        public const string PLUGIN_VERSION = "2.2.0";
     }
 }

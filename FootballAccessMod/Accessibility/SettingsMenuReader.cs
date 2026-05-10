@@ -177,6 +177,13 @@ namespace FootballAccessMod.Accessibility
                 format:      v => v == 0  ? "Off"
                                : v == 10 ? "Maximum, auto"
                                : v.ToString()),
+
+            // ---- CPU Difficulty (TEMPORARILY HIDDEN) ----
+            // Setting hidden because the underlying patches did not produce a noticeable
+            // difference in playtest. Code preserved in Accessibility/DifficultyManager.cs
+            // and the ConfigEntry stays bound (so saved values aren't lost) — re-add this
+            // SettingDef and re-enable DifficultyPatches/DifficultyManager in Plugin.cs
+            // once a more impactful approach lands.
         };
 
         // =========================================================

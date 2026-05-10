@@ -65,6 +65,10 @@
       <HintPath>$(GamePath)Football Simulator_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(GamePath)Football Simulator_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Unity.TextMeshPro">
       <HintPath>$(GamePath)Football Simulator_Data\Managed\Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
